@@ -1,0 +1,7 @@
+# CUDA PyTorch (install first with --index-url, see README)
+torch==2.8.0+cu129
+torchaudio==2.8.0+cu129
+nvidia-cublas-cu12==12.9.1.4
+nvidia-cuda-cupti-cu12==12.9.79
+nvidia-cuda-runtime-cu12==12.9.79
+buzz-captions
