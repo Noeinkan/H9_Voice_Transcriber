@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,30 @@ HF_BASE = "https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main"
 SMALL_FILES = ("config.json", "tokenizer.json", "vocabulary.json", "preprocessor_config.json")
 MODEL_BIN = "model.bin"
 CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB
-PARAGRAPH_SPLIT_MS = int(os.getenv("BUZZ_PARAGRAPH_SPLIT_TIME", "2000"))
+PARAGRAPH_SPLIT_MS = int(os.getenv("BUZZ_PARAGRAPH_SPLIT_TIME", "1500"))
+
+# Drop whole segments that are only Whisper noise markers (output readability only).
+_HALLUCINATION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\(music\)$", re.IGNORECASE),
+    re.compile(r"^\[music\]$", re.IGNORECASE),
+    re.compile(r"^\[BLANK_AUDIO\]$", re.IGNORECASE),
+    re.compile(r"^\[applause\]$", re.IGNORECASE),
+    re.compile(r"^\[laughter\]$", re.IGNORECASE),
+    re.compile(r"^\[silence\]$", re.IGNORECASE),
+    re.compile(r"^\(speaking in .+ language\)$", re.IGNORECASE),
+    re.compile(r"^\.\.\.$"),
+)
+
+
+def _is_hallucination(text: str) -> bool:
+    return any(pattern.match(text) for pattern in _HALLUCINATION_PATTERNS)
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() not in ("0", "false", "no", "off")
 
 
 def _write_txt(path: Path, segments: list) -> None:
@@ -60,9 +84,9 @@ def _write_txt(path: Path, segments: list) -> None:
     previous_end: int | None = None
     for segment in segments:
         text = segment.text.strip()
-        if not text:
+        if not text or _is_hallucination(text):
             continue
-        if previous_end is not None and (segment.start - previous_end) >= PARAGRAPH_SPLIT_MS:
+        if previous_end is not None and (segment.start - previous_end) > PARAGRAPH_SPLIT_MS:
             parts.append("\n\n")
         parts.append(text + " ")
         previous_end = segment.end
@@ -225,21 +249,42 @@ def split_audio(source: Path, dest_dir: Path) -> list[Path]:
     return parts
 
 
-def transcribe_file(audio_path: Path, model_dir: Path) -> list[Segment]:
+def _load_model(model_dir: Path):
     import faster_whisper
     import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    compute_type = "int8_float16" if device == "cuda" else "int8"
-    log(f"  loading model on {device}...")
+    compute_type = os.getenv("H9_COMPUTE_TYPE") or "int8"
+    log(f"Loading model on {device} (compute_type={compute_type})...")
+    try:
+        model = faster_whisper.WhisperModel(
+            str(model_dir),
+            device=device,
+            compute_type=compute_type,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to load Whisper model on {device}: {exc}. "
+            "If the process crashes with 0xC0000005, try H9_COMPUTE_TYPE=int8."
+        ) from exc
+    log(f"Model loaded on {device}")
+    return model
 
-    model = faster_whisper.WhisperModel(
-        str(model_dir),
-        device=device,
-        compute_type=compute_type,
-    )
+
+def transcribe_file(audio_path: Path, model) -> list[Segment]:
+    beam_size = int(os.getenv("H9_BEAM_SIZE", "1"))
+    vad_filter = _env_flag("H9_VAD", default=True)
+
     log(f"  transcribing {audio_path.name}...")
-    whisper_segments, _info = model.transcribe(str(audio_path), language=None, task="transcribe")
+    whisper_segments, _info = model.transcribe(
+        str(audio_path),
+        language=None,
+        task="transcribe",
+        beam_size=beam_size,
+        vad_filter=vad_filter,
+        condition_on_previous_text=False,
+        no_speech_threshold=0.6,
+    )
     return [
         Segment(
             start=int(segment.start * 1000),
@@ -254,7 +299,7 @@ def should_skip(source: Path, output: Path) -> bool:
     return output.exists() and output.stat().st_mtime >= source.stat().st_mtime
 
 
-def transcribe_one(source: Path, model_dir: Path) -> None:
+def transcribe_one(source: Path, model) -> None:
     output = OUTPUT_DIR / f"{source.stem}.txt"
     if should_skip(source, output):
         log(f"SKIP {source.name} (output is up to date)")
@@ -274,7 +319,7 @@ def transcribe_one(source: Path, model_dir: Path) -> None:
         offset_ms = 0
         for index, part in enumerate(parts, start=1):
             log(f"  segment {index}/{len(parts)}: {part.name}")
-            segments = transcribe_file(part, model_dir)
+            segments = transcribe_file(part, model)
             for segment in segments:
                 all_segments.append(
                     Segment(
@@ -287,7 +332,7 @@ def transcribe_one(source: Path, model_dir: Path) -> None:
             offset_ms += int(probe_duration_seconds(part) * 1000)
         shutil.rmtree(segment_dir, ignore_errors=True)
     else:
-        all_segments = transcribe_file(source, model_dir)
+        all_segments = transcribe_file(source, model)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     _write_txt(output, all_segments)
@@ -315,9 +360,15 @@ def main() -> int:
 
     model_dir = ensure_model()
 
+    try:
+        model = _load_model(model_dir)
+    except RuntimeError as exc:
+        log(f"ERROR: {exc}")
+        return 1
+
     for source in sources:
         try:
-            transcribe_one(source, model_dir)
+            transcribe_one(source, model)
         except Exception as exc:
             log(f"ERROR {source.name}: {exc}")
             return 1

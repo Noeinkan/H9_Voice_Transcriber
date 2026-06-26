@@ -1,0 +1,16 @@
+{
+  "venvPath": ".",
+  "venv": "venv",
+  "include": [
+    "transcribe.py",
+    "_vram_diag.py"
+  ],
+  "exclude": [
+    "venv",
+    "models",
+    "input",
+    "output",
+    "_work",
+    ".git-rewrite"
+  ]
+}
