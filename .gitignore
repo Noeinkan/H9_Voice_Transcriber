@@ -26,8 +26,8 @@ _*.py
 _*.bat
 
 # Local Whisper weights (downloaded by download_model.bat)
-models/*/
-!models/.gitkeep
+models/large-v3/**
+!models/large-v3/.gitkeep
 
 # User data (folders stay tracked via .gitkeep)
 input/*
