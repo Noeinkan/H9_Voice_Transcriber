@@ -9,7 +9,12 @@ Offline transcription of long M4A recordings into plain text files, powered by [
 3. Double-click `run.bat`.
 4. Collect `.txt` transcripts from the `output/` folder.
 
-Progress and errors are appended to `transcripts.log`.
+Progress and errors are appended to `transcripts.log` (per-file) and `run.log` (per step in `run.bat`).
+You can watch the live log in another terminal with:
+
+```bat
+powershell -Command "Get-Content transcripts.log -Wait"
+```
 
 ## First-time setup
 
@@ -47,7 +52,7 @@ python -c "import torch, buzz; print(torch.cuda.is_available(), torch.cuda.get_d
 
 | Problem | Fix |
 |---------|-----|
-| `ffmpeg` not found | Install via `winget install Gyan.FFmpeg` and restart the terminal |
+| `ffmpeg` not found | `run.bat` will tell you and stop. Install via `winget install Gyan.FFmpeg`, then close the terminal, open a new one, and re-run `run.bat`. |
 | CUDA not available | Update NVIDIA drivers, then reinstall the CUDA PyTorch wheels above |
 | Out of memory | Close other GPU apps; the script already uses reduced VRAM mode |
 | Slow first run | Model download + first GPU compile are one-time costs |

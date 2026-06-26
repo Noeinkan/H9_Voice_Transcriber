@@ -15,8 +15,19 @@ env/
 
 # Runtime artifacts
 transcripts.log
+run.log
+run_live.log
+*.log
 _work/
 *.tmp
+
+# Local scratch / debug scripts (underscore-prefixed one-offs)
+_*.py
+_*.bat
+
+# Local Whisper weights (downloaded by download_model.bat)
+models/*/
+!models/.gitkeep
 
 # User data (folders stay tracked via .gitkeep)
 input/*

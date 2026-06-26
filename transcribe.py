@@ -13,8 +13,27 @@ from pathlib import Path
 
 os.environ.setdefault("BUZZ_REDUCE_GPU_MEMORY", "true")
 
-from buzz.transcriber.file_transcriber import write_output
-from buzz.transcriber.transcriber import OutputFormat, Segment
+# Importing buzz.cuda_setup first ensures Buzz's CUDA allocator patches are in
+# place before faster_whisper constructs its WhisperModel.
+from buzz import cuda_setup  # noqa: F401
+
+# IMPORTANT: do NOT import from buzz.transcriber.* at module load time.
+# Any import from that subpackage (e.g. Segment, OutputFormat, write_output)
+# transitively loads the full OpenAI Whisper package, which conflicts with
+# faster_whisper's CUDA init on some driver/GPU combos (RTX 5060 / CUDA 12.9)
+# and causes a 0xC0000005 native segfault when the model is later constructed.
+# We define a local Segment below and use a local _write_txt for output.
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class Segment:
+    start: int  # start time in ms
+    end: int  # end time in ms
+    text: str
+    translation: str = ""
 
 ROOT = Path(__file__).resolve().parent
 INPUT_DIR = ROOT / "input"
@@ -28,6 +47,26 @@ HF_BASE = "https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main"
 SMALL_FILES = ("config.json", "tokenizer.json", "vocabulary.json", "preprocessor_config.json")
 MODEL_BIN = "model.bin"
 CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB
+PARAGRAPH_SPLIT_MS = int(os.getenv("BUZZ_PARAGRAPH_SPLIT_TIME", "2000"))
+
+
+def _write_txt(path: Path, segments: list) -> None:
+    """Write segments to a .txt file, mirroring Buzz's TXT format.
+
+    Joins segment texts with single spaces and inserts blank lines when the
+    gap between consecutive segments exceeds PARAGRAPH_SPLIT_MS.
+    """
+    parts: list[str] = []
+    previous_end: int | None = None
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+        if previous_end is not None and (segment.start - previous_end) >= PARAGRAPH_SPLIT_MS:
+            parts.append("\n\n")
+        parts.append(text + " ")
+        previous_end = segment.end
+    path.write_text("".join(parts), encoding="utf-8")
 
 
 def log(message: str) -> None:
@@ -187,7 +226,6 @@ def split_audio(source: Path, dest_dir: Path) -> list[Path]:
 
 
 def transcribe_file(audio_path: Path, model_dir: Path) -> list[Segment]:
-    from buzz import cuda_setup  # noqa: F401
     import faster_whisper
     import torch
 
@@ -252,7 +290,7 @@ def transcribe_one(source: Path, model_dir: Path) -> None:
         all_segments = transcribe_file(source, model_dir)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    write_output(str(output), all_segments, OutputFormat.TXT)
+    _write_txt(output, all_segments)
     log(f"DONE  {source.name} -> {output.name}")
 
 
