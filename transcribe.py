@@ -272,13 +272,13 @@ def _load_model(model_dir: Path):
 
 
 def transcribe_file(audio_path: Path, model) -> list[Segment]:
-    beam_size = int(os.getenv("H9_BEAM_SIZE", "1"))
+    beam_size = int(os.getenv("H9_BEAM_SIZE", "5"))
     vad_filter = _env_flag("H9_VAD", default=True)
 
     log(f"  transcribing {audio_path.name}...")
     whisper_segments, _info = model.transcribe(
         str(audio_path),
-        language=None,
+        language="en",
         task="transcribe",
         beam_size=beam_size,
         vad_filter=vad_filter,

@@ -3,35 +3,38 @@
 Exits with the spawned command's exit code.
 
 Usage:
-    python run_with_log.py <log_file> -- <command> [args...]
+    python run_with_log.py <log_file> -- "<command string>"
 
-Used by run.bat so that long-running pip / python steps show progress live
-while also being captured to a log file with the right exit code.
+The command is passed as a single string and split via shlex so that
+arguments with spaces (URLs, quoted values, etc.) survive intact.
 """
 
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 
 def main() -> int:
     args = sys.argv[1:]
     if "--" not in args:
-        print("usage: run_with_log.py <log_file> -- <command> [args...]", file=sys.stderr)
+        print("usage: run_with_log.py <log_file> -- <command string>", file=sys.stderr)
         return 2
     sep = args.index("--")
     log_path = Path(args[0])
-    cmd = args[sep + 1:]
+    cmd = shlex.split(args[sep + 1])
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = log_path.open("a", encoding="utf-8")
 
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
+
+    if cmd and cmd[0] == "python":
+        cmd[0] = sys.executable
 
     creationflags = 0
     if os.name == "nt":

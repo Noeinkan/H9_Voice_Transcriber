@@ -69,19 +69,10 @@ call :log "  dependencies missing - installing (first run can take 10+ minutes)"
 echo Installing dependencies ^^(first run may take 10+ minutes^)^. Live output below; mirrored to run.log.
 echo.
 
-call :run_step "pip install -U pip"  python -m pip install -U pip
-if !RC! NEQ 0 goto :fail_deps
-
-call :run_step "pip install torch + torchaudio (CUDA 12.9 wheels)"  pip install -U torch==2.8.0+cu129 torchaudio==2.8.0+cu129 --index-url https://download.pytorch.org/whl/cu129
-if !RC! NEQ 0 goto :fail_deps
-
-call :run_step "pip install nvidia-cublas / cuda-cupti / cuda-runtime"  pip install nvidia-cublas-cu12==12.9.1.4 nvidia-cuda-cupti-cu12==12.9.79 nvidia-cuda-runtime-cu12==12.9.79 --extra-index-url https://pypi.ngc.nvidia.com
-if !RC! NEQ 0 goto :fail_deps
-
-call :run_step "pip install buzz-captions"  pip install buzz-captions
-if !RC! NEQ 0 goto :fail_deps
-
-call :run_step "pip install --force-reinstall torch/torchaudio CUDA wheels"  pip install --force-reinstall torch==2.8.0+cu129 torchaudio==2.8.0+cu129 --index-url https://download.pytorch.org/whl/cu129
+call :log "    > running install_deps.py (handles all pip steps in Python)"
+python "%~dp0install_deps.py"
+set "RC=!ERRORLEVEL!"
+call :log "    install_deps.py returned !RC!"
 if !RC! NEQ 0 goto :fail_deps
 
 call :log "  dependencies installed"
@@ -172,19 +163,3 @@ set "TS=!DATE! !TIME!"
 echo [!TS!] %~1
 exit /b
 
-REM ============================================================
-REM :run_step <label> <command...>
-REM   Run command, capture its exit code into !RC!.
-REM   Stream stdout+stderr to console live, mirror to LOG_FILE
-REM   (blank lines stripped). Real-time because we use a small
-REM   Python tee (run_with_log.py) so both halves happen in one
-REM   subprocess pipe and we can still read the upstream's exit code.
-REM ============================================================
-:run_step
-set "STEP_LABEL=%~1"
-shift
-call :log "    > %STEP_LABEL%"
-python "%~dp0run_with_log.py" "!LOG_FILE!" -- %*
-set "RC=!ERRORLEVEL!"
-call :log "    %STEP_LABEL% returned !RC!"
-exit /b
