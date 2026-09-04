@@ -8,17 +8,20 @@ set "STEP=0"
 call :log "==== run.bat started ===="
 
 REM ============================================================
-REM Arguments:  run.bat [--speakers [N]]
-REM   --speakers     also write output\<name>.speakers.txt, where every turn
-REM                  is tagged Person 1, Person 2, ...
+REM Arguments:  run.bat [--speakers [N]] [--no-speakers]
+REM   (default)      speaker labels are ON: every recording also gets
+REM                  output\<name>.speakers.txt, where every turn is tagged
+REM                  Person 1, Person 2, ...
 REM   --speakers 2   same, but tell the diarizer how many people are talking
+REM   --no-speakers  plain transcript only, no diarization pass
 REM ============================================================
-set "H9_DIARIZE="
+set "H9_DIARIZE=1"
 set "H9_SPEAKERS="
 
 :parse_args
 if "%~1"=="" goto :args_done
 if /I "%~1"=="--speakers" goto :arg_speakers
+if /I "%~1"=="--no-speakers" goto :arg_no_speakers
 call :log "  ignoring unknown argument: %~1"
 shift
 goto :parse_args
@@ -33,8 +36,18 @@ set "H9_SPEAKERS=%~1"
 shift
 goto :parse_args
 
+:arg_no_speakers
+set "H9_DIARIZE=0"
+set "H9_SPEAKERS="
+shift
+goto :parse_args
+
 :args_done
-if defined H9_DIARIZE call :log "  speaker labels enabled (H9_SPEAKERS=!H9_SPEAKERS!)"
+if "!H9_DIARIZE!"=="1" (
+    call :log "  speaker labels enabled (H9_SPEAKERS=!H9_SPEAKERS!)"
+) else (
+    call :log "  speaker labels disabled (--no-speakers)"
+)
 
 REM ============================================================
 REM STEP 0: ffmpeg on PATH

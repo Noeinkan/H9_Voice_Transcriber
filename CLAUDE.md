@@ -11,7 +11,9 @@ them fails at development time.
 regex: a stale one raises nothing, the progress bar just stops moving.
 
 **A new `H9_*` variable needs a field in `runner.Options.env()`**, or the
-window has no way to set it — that is why `--speakers` is batch-only today.
+window has no way to set it. `runner.Options` always writes every field it
+owns, so a default changed only in `transcribe.py` is invisible to the window:
+change both, or the two entry points disagree.
 
 **`gui/` imports the standard library and nothing else.**
 `tools/build_exe.py` freezes only the window and excludes torch, numpy,

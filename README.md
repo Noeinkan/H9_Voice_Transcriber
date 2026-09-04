@@ -23,7 +23,7 @@ Nothing leaves your machine — the model runs locally.
 | **Add audio…** | Copies the files you pick into `input`. Accepts m4a, mp3, wav, flac, ogg, opus, aac, wma and the common video containers. |
 | **Quality** | `Fast` / `Balanced` / `Best` — Whisper's beam size (1 / 5 / 10). Higher is slower and slightly more accurate. |
 | **Precision** | `Low VRAM (int8)` is the safe default on a 4 GB card. `Sharper (float16)` is better when you have VRAM to spare. |
-| **Speakers** | `Off` by default. Pick `2 people` for an interview and every file also gets a `<name>.speakers.txt` with the turns tagged `Person 1` / `Person 2`. `Auto` lets it count the voices itself. See [Telling the voices apart](#telling-the-voices-apart) — including how to make yourself Person 1. |
+| **Speakers** | `Auto` by default: every file also gets a `<name>.speakers.txt` with the turns tagged `Person 1` / `Person 2`, and the clustering counts the voices itself. Pick `2 people` for an interview when you already know the count — it is more reliable than guessing. `Off` skips the labelling and its extra pass over the audio. See [Telling the voices apart](#telling-the-voices-apart) — including how to make yourself Person 1. |
 | **Redo files already transcribed** | Off by default: files whose `.txt` is newer than the audio are skipped. Tick it to transcribe them again. |
 | **Stop** | Kills the transcription and the ffmpeg processes under it. Files already finished keep their transcripts. |
 | **Show details** | Opens the live log — the same lines that go into `transcripts.log`. It opens by itself if a run fails. |
@@ -69,19 +69,22 @@ powershell -Command "Get-Content transcripts.log -Wait"
 
 ## Telling the voices apart
 
-The transcriber can split a recording into `Person 1` and `Person 2` turns instead of one unbroken
-block of text. It stays fully offline: the models come from NVIDIA NeMo, download once from
-NVIDIA's public servers, and need no account, key or licence.
+Every recording is split into `Person 1` and `Person 2` turns instead of one unbroken block of
+text. This is **on by default**, in the window and from a terminal alike. It stays fully offline:
+the models come from NVIDIA NeMo, download once from NVIDIA's public servers, and need no account,
+key or licence.
 
-In the window, set **Speakers** to `2 people` before clicking Start. From a terminal instead:
+The window's **Speakers** dropdown starts on `Auto`. From a terminal:
 
 ```bat
-run.bat --speakers      REM work out how many people are talking
+run.bat                 REM default: work out how many people are talking
 run.bat --speakers 2    REM you already know it is a two-person interview
+run.bat --no-speakers   REM plain transcript only, skip the labelling pass
 ```
 
-Pin the number whenever you know it. Left to guess, the clustering sometimes splits one voice into
-two when the line is noisy or someone changes tone.
+Pin the number whenever you know it — set **Speakers** to `2 people`, or pass `--speakers 2`. Left
+to guess, the clustering sometimes splits one voice into two when the line is noisy or someone
+changes tone.
 
 You get a **second** file per recording, `output\<name>.speakers.txt`:
 
@@ -164,7 +167,7 @@ Environment variables read by `transcribe.py`, all set for you by the window:
 | `H9_COMPUTE_TYPE` | `int8` | `int8` or `float16` |
 | `H9_VAD` | on | Voice-activity filtering |
 | `H9_FORCE` | off | Re-transcribe files that already have an up-to-date `.txt` |
-| `H9_DIARIZE` | off | Also write `<name>.speakers.txt` with Person 1 / Person 2 turns (`run.bat --speakers`) |
+| `H9_DIARIZE` | **on** | Also write `<name>.speakers.txt` with Person 1 / Person 2 turns. Set to `0` (`run.bat --no-speakers`) for the plain transcript only |
 | `H9_SPEAKERS` | auto | How many people are in the recording, when you know it |
 | `H9_TIMESTAMPS` | off | Prefix every speaker turn with `[mm:ss]` |
 | `H9_PROGRESS` | off | Print `@progress <percent>` lines on stdout for the window's playhead. They never reach `transcripts.log`, and `run.bat` leaves this unset so its console output is unchanged. |
@@ -198,4 +201,4 @@ run.bat         unattended batch run
 | Slow first run | Model download plus the first GPU compile are one-time costs |
 | One person split across `Person 1` and `Person 3` | Re-run with the count pinned: `run.bat --speakers 2` |
 | `Person 1` is the other person, not you | Enroll your voice (`enroll_voice.bat`). If you already did, check `transcripts.log`: it prints the match score per voice, and anything under 0.35 means the sample and the recording sound too different — re-record the sample on the device you actually use for interviews |
-| No `.speakers.txt` appeared | The plain `.txt` was up to date so the file was skipped. Delete it, or tick **Redo files already transcribed** in the window, then run with `--speakers` again |
+| No `.speakers.txt` appeared | Either **Speakers** was set to `Off` (`--no-speakers`), or the diarizer found no speech — `transcripts.log` says which |

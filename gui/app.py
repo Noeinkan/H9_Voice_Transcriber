@@ -66,7 +66,7 @@ class App(tk.Tk):
         self._force = tk.BooleanVar(value=False)
         self._quality = tk.StringVar(value="Balanced")
         self._precision = tk.StringVar(value="Low VRAM (int8)")
-        self._speakers = tk.StringVar(value="Off")
+        self._speakers = tk.StringVar(value="Auto")
         self._gpu_check: preflight.Check | None = None
         # Tk is not thread-safe: worker threads post (callable, args)
         # here and _drain runs them on the main loop.

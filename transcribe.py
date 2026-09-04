@@ -76,10 +76,11 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return value.lower() not in ("0", "false", "no", "off")
 
 
-# Speaker labelling is opt-in: `run.bat --speakers`, or H9_DIARIZE=1.
-# H9_SPEAKERS pins the number of people in the room (2 for an interview);
-# left unset, the clustering works it out on its own.
-DIARIZE = _env_flag("H9_DIARIZE", default=False)
+# Speaker labelling is on by default: every recording also gets a
+# <name>.speakers.txt. Switch it off with `run.bat --no-speakers`, or
+# H9_DIARIZE=0. H9_SPEAKERS pins the number of people in the room (2 for an
+# interview); left unset, the clustering works it out on its own.
+DIARIZE = _env_flag("H9_DIARIZE", default=True)
 NUM_SPEAKERS = int(os.getenv("H9_SPEAKERS") or 0) or None
 TURN_TIMESTAMPS = _env_flag("H9_TIMESTAMPS", default=False)
 

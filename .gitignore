@@ -49,3 +49,6 @@ voice/
 build/
 dist/
 *.spec
+
+# Screenshots captured by screenshot-kit
+.shots/
