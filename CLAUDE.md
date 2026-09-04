@@ -32,6 +32,12 @@ numbers only mean something inside one pass, so labelling per part gives
 `Person 1` a different face in each — plausible output, wrong. Word timings are
 shifted onto the full recording's clock first (`transcribe_one`).
 
+**The labelled transcript overwrites the plain one**, so `<name>.txt` is the
+only output. `should_skip` tells the two apart by matching `Person N: ` against
+the file's **first line** (`is_labelled`). Change how `write_turns` opens a
+turn and nothing raises: every recording just looks unlabelled forever and is
+re-transcribed on every run.
+
 **`AUDIO_SUFFIXES` and the 500 MB "model is ready" threshold are written out
 twice**, in `transcribe.py` and in `gui/paths.py`. Change one, change the other,
 or the queue lists files the transcriber ignores.

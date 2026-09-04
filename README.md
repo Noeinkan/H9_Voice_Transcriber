@@ -23,7 +23,7 @@ Nothing leaves your machine — the model runs locally.
 | **Add audio…** | Copies the files you pick into `input`. Accepts m4a, mp3, wav, flac, ogg, opus, aac, wma and the common video containers. |
 | **Quality** | `Fast` / `Balanced` / `Best` — Whisper's beam size (1 / 5 / 10). Higher is slower and slightly more accurate. |
 | **Precision** | `Low VRAM (int8)` is the safe default on a 4 GB card. `Sharper (float16)` is better when you have VRAM to spare. |
-| **Speakers** | `Auto` by default: every file also gets a `<name>.speakers.txt` with the turns tagged `Person 1` / `Person 2`, and the clustering counts the voices itself. Pick `2 people` for an interview when you already know the count — it is more reliable than guessing. `Off` skips the labelling and its extra pass over the audio. See [Telling the voices apart](#telling-the-voices-apart) — including how to make yourself Person 1. |
+| **Speakers** | `Auto` by default: the transcript comes out split into turns tagged `Person 1` / `Person 2`, and the clustering counts the voices itself. Pick `2 people` for an interview when you already know the count — it is more reliable than guessing. `Off` gives one unbroken block of text and skips the extra pass over the audio. See [Telling the voices apart](#telling-the-voices-apart) — including how to make yourself Person 1. |
 | **Redo files already transcribed** | Off by default: files whose `.txt` is newer than the audio are skipped. Tick it to transcribe them again. |
 | **Stop** | Kills the transcription and the ffmpeg processes under it. Files already finished keep their transcripts. |
 | **Show details** | Opens the live log — the same lines that go into `transcripts.log`. It opens by itself if a run fails. |
@@ -86,7 +86,7 @@ Pin the number whenever you know it — set **Speakers** to `2 people`, or pass 
 to guess, the clustering sometimes splits one voice into two when the line is noisy or someone
 changes tone.
 
-You get a **second** file per recording, `output\<name>.speakers.txt`:
+There is one file per recording, `output\<name>.txt`, and it comes out split into turns:
 
 ```text
 Person 1: So, tell me how the handover went.
@@ -94,13 +94,12 @@ Person 1: So, tell me how the handover went.
 Person 2: We closed it two weeks late, but the model was clean by then.
 ```
 
-The plain `output\<name>.txt` is still written exactly as before, so nothing that already reads
-those files breaks.
+With `--no-speakers` that same file is one unbroken block of text instead.
 
 First run is slower: it downloads about 200 MB of models, and on a four-minute clip labelling took
-roughly a minute on top of transcription. A recording that already has a `.txt` but no
-`.speakers.txt` is transcribed again — the word-level timings the labeller needs were never saved
-to disk.
+roughly a minute on top of transcription. A recording whose `.txt` has no `Person 1:` on its first
+line is transcribed again — the word-level timings the labeller needs were never saved to disk, so
+they cannot be recovered from the text.
 
 ### Being Person 1 yourself
 
@@ -167,7 +166,7 @@ Environment variables read by `transcribe.py`, all set for you by the window:
 | `H9_COMPUTE_TYPE` | `int8` | `int8` or `float16` |
 | `H9_VAD` | on | Voice-activity filtering |
 | `H9_FORCE` | off | Re-transcribe files that already have an up-to-date `.txt` |
-| `H9_DIARIZE` | **on** | Also write `<name>.speakers.txt` with Person 1 / Person 2 turns. Set to `0` (`run.bat --no-speakers`) for the plain transcript only |
+| `H9_DIARIZE` | **on** | Split `<name>.txt` into Person 1 / Person 2 turns. Set to `0` (`run.bat --no-speakers`) for one unbroken block of text |
 | `H9_SPEAKERS` | auto | How many people are in the recording, when you know it |
 | `H9_TIMESTAMPS` | off | Prefix every speaker turn with `[mm:ss]` |
 | `H9_PROGRESS` | off | Print `@progress <percent>` lines on stdout for the window's playhead. They never reach `transcripts.log`, and `run.bat` leaves this unset so its console output is unchanged. |
@@ -201,4 +200,4 @@ run.bat         unattended batch run
 | Slow first run | Model download plus the first GPU compile are one-time costs |
 | One person split across `Person 1` and `Person 3` | Re-run with the count pinned: `run.bat --speakers 2` |
 | `Person 1` is the other person, not you | Enroll your voice (`enroll_voice.bat`). If you already did, check `transcripts.log`: it prints the match score per voice, and anything under 0.35 means the sample and the recording sound too different — re-record the sample on the device you actually use for interviews |
-| No `.speakers.txt` appeared | Either **Speakers** was set to `Off` (`--no-speakers`), or the diarizer found no speech — `transcripts.log` says which |
+| The transcript has no `Person 1:` tags | Either **Speakers** was set to `Off` (`--no-speakers`), or the diarizer found no speech — `transcripts.log` says which |

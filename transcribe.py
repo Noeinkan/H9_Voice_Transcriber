@@ -76,10 +76,11 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return value.lower() not in ("0", "false", "no", "off")
 
 
-# Speaker labelling is on by default: every recording also gets a
-# <name>.speakers.txt. Switch it off with `run.bat --no-speakers`, or
-# H9_DIARIZE=0. H9_SPEAKERS pins the number of people in the room (2 for an
-# interview); left unset, the clustering works it out on its own.
+# Speaker labelling is on by default: <name>.txt comes out split into
+# Person 1 / Person 2 turns. Switch it off with `run.bat --no-speakers`, or
+# H9_DIARIZE=0, and the transcript is one unbroken block instead.
+# H9_SPEAKERS pins the number of people in the room (2 for an interview);
+# left unset, the clustering works it out on its own.
 DIARIZE = _env_flag("H9_DIARIZE", default=True)
 NUM_SPEAKERS = int(os.getenv("H9_SPEAKERS") or 0) or None
 TURN_TIMESTAMPS = _env_flag("H9_TIMESTAMPS", default=False)
@@ -343,19 +344,38 @@ def transcribe_file(
     return segments, words
 
 
-def should_skip(source: Path, output: Path, speakers_output: Path | None = None) -> bool:
+# A labelled transcript opens on its first turn's tag, so one line tells it
+# apart from a plain one. `[mm:ss] ` / `[h:mm:ss] ` when H9_TIMESTAMPS is on.
+_LABELLED_FIRST_LINE = re.compile(r"^(?:\[\d+:\d{2}(?::\d{2})?\] )?Person \d+: ")
+
+
+def is_labelled(output: Path) -> bool:
+    """True when `output` came from the speaker labeller, not `_write_txt`."""
+    try:
+        with output.open(encoding="utf-8") as handle:
+            return bool(_LABELLED_FIRST_LINE.match(handle.readline()))
+    except OSError:
+        return False
+
+
+def should_skip(source: Path, output: Path) -> bool:
     if _env_flag("H9_FORCE", default=False):
         return False
     if not (output.exists() and output.stat().st_mtime >= source.stat().st_mtime):
         return False
-    # A transcript produced before speaker labelling was switched on has no
-    # word timings stored anywhere, so the audio has to go through Whisper
-    # again to get them.
-    return speakers_output is None or speakers_output.exists()
+    # A transcript written before labelling was switched on carries no tags,
+    # and the word timings the labeller needs were never stored anywhere, so
+    # the audio has to go through Whisper again to get them.
+    return not DIARIZE or is_labelled(output)
 
 
 def label_speakers(source: Path, words: list[dict], output: Path) -> None:
-    """Write a second transcript where every turn is tagged Person 1, 2, ..."""
+    """Rewrite the transcript with every turn tagged Person 1, 2, ...
+
+    Replaces the plain transcript `transcribe_one` has already written. That
+    one stays on disk untouched whenever labelling bails out below, so a
+    failure here still leaves a readable file rather than nothing.
+    """
     import faster_whisper
 
     import diarization
@@ -392,8 +412,7 @@ def label_speakers(source: Path, words: list[dict], output: Path) -> None:
 
 def transcribe_one(source: Path, model) -> None:
     output = OUTPUT_DIR / f"{source.stem}.txt"
-    speakers_output = OUTPUT_DIR / f"{source.stem}.speakers.txt" if DIARIZE else None
-    if should_skip(source, output, speakers_output):
+    if should_skip(source, output):
         log(f"SKIP {source.name} (output is up to date)")
         return
 
@@ -451,8 +470,8 @@ def transcribe_one(source: Path, model) -> None:
     emit_progress(1.0)
     log(f"DONE  {source.name} -> {output.name}")
 
-    if speakers_output is not None:
-        label_speakers(source, all_words, speakers_output)
+    if DIARIZE:
+        label_speakers(source, all_words, output)
 
 
 def main() -> int:
@@ -480,7 +499,7 @@ def main() -> int:
 
     if DIARIZE:
         pinned = f"{NUM_SPEAKERS} people" if NUM_SPEAKERS else "speaker count auto-detected"
-        log(f"Speaker labels ON ({pinned}) -> extra .speakers.txt per file")
+        log(f"Speaker labels ON ({pinned}) -> transcripts tagged Person 1, 2, ...")
 
     model_dir = ensure_model()
 

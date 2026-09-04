@@ -9,11 +9,10 @@ call :log "==== run.bat started ===="
 
 REM ============================================================
 REM Arguments:  run.bat [--speakers [N]] [--no-speakers]
-REM   (default)      speaker labels are ON: every recording also gets
-REM                  output\<name>.speakers.txt, where every turn is tagged
-REM                  Person 1, Person 2, ...
+REM   (default)      speaker labels are ON: output\<name>.txt comes out split
+REM                  into turns tagged Person 1, Person 2, ...
 REM   --speakers 2   same, but tell the diarizer how many people are talking
-REM   --no-speakers  plain transcript only, no diarization pass
+REM   --no-speakers  one unbroken block of text, no diarization pass
 REM ============================================================
 set "H9_DIARIZE=1"
 set "H9_SPEAKERS="
