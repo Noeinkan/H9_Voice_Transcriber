@@ -41,3 +41,11 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Enrolled voice sample and fingerprint (personal data, stays local)
+voice/
+
+# Frozen desktop build (PyInstaller)
+build/
+dist/
+*.spec

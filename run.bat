@@ -8,6 +8,35 @@ set "STEP=0"
 call :log "==== run.bat started ===="
 
 REM ============================================================
+REM Arguments:  run.bat [--speakers [N]]
+REM   --speakers     also write output\<name>.speakers.txt, where every turn
+REM                  is tagged Person 1, Person 2, ...
+REM   --speakers 2   same, but tell the diarizer how many people are talking
+REM ============================================================
+set "H9_DIARIZE="
+set "H9_SPEAKERS="
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /I "%~1"=="--speakers" goto :arg_speakers
+call :log "  ignoring unknown argument: %~1"
+shift
+goto :parse_args
+
+:arg_speakers
+set "H9_DIARIZE=1"
+shift
+if "%~1"=="" goto :args_done
+echo %~1| findstr /r "^[0-9][0-9]*$" >nul 2>&1
+if errorlevel 1 goto :parse_args
+set "H9_SPEAKERS=%~1"
+shift
+goto :parse_args
+
+:args_done
+if defined H9_DIARIZE call :log "  speaker labels enabled (H9_SPEAKERS=!H9_SPEAKERS!)"
+
+REM ============================================================
 REM STEP 0: ffmpeg on PATH
 REM ============================================================
 set /a STEP+=1
@@ -125,6 +154,7 @@ exit /b !RC!
 :finished_ok
 call :log "STEP !STEP!: finished successfully"
 echo Finished. Check the output\ folder for .txt files.
+if defined H9_DIARIZE echo Speaker-labelled copies are the .speakers.txt files in the same folder.
 pause
 exit /b 0
 

@@ -44,6 +44,8 @@ LOG_FILE = ROOT / "transcripts.log"
 MODEL_DIR = ROOT / "models" / "large-v3"
 
 SEGMENT_SECONDS = 30 * 60
+AUDIO_SUFFIXES = (".m4a", ".mp3", ".wav", ".mp4", ".aac", ".flac", ".ogg",
+                  ".opus", ".wma", ".mov", ".mkv", ".webm")
 HF_BASE = "https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main"
 SMALL_FILES = ("config.json", "tokenizer.json", "vocabulary.json", "preprocessor_config.json")
 MODEL_BIN = "model.bin"
@@ -72,6 +74,25 @@ def _env_flag(name: str, default: bool = True) -> bool:
     if value is None:
         return default
     return value.lower() not in ("0", "false", "no", "off")
+
+
+# Speaker labelling is opt-in: `run.bat --speakers`, or H9_DIARIZE=1.
+# H9_SPEAKERS pins the number of people in the room (2 for an interview);
+# left unset, the clustering works it out on its own.
+DIARIZE = _env_flag("H9_DIARIZE", default=False)
+NUM_SPEAKERS = int(os.getenv("H9_SPEAKERS") or 0) or None
+TURN_TIMESTAMPS = _env_flag("H9_TIMESTAMPS", default=False)
+
+# The desktop window sets H9_PROGRESS so it can draw a live position inside the
+# recording. These lines go to stdout only - never to transcripts.log - and the
+# batch path leaves the variable unset, so its console output is unchanged.
+EMIT_PROGRESS = _env_flag("H9_PROGRESS", default=False)
+
+
+def emit_progress(fraction: float) -> None:
+    percent = max(0.0, min(1.0, fraction)) * 100
+    if EMIT_PROGRESS:
+        print(f"@progress {percent:.1f}", flush=True)
 
 
 def _write_txt(path: Path, segments: list) -> None:
@@ -227,7 +248,7 @@ def probe_duration_seconds(path: Path) -> float:
 
 def split_audio(source: Path, dest_dir: Path) -> list[Path]:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    pattern = dest_dir / f"{source.stem}_part%03d.m4a"
+    pattern = dest_dir / f"{source.stem}_part%03d{source.suffix}"
     run_ffmpeg(
         [
             "-i",
@@ -243,7 +264,7 @@ def split_audio(source: Path, dest_dir: Path) -> list[Path]:
             str(pattern),
         ]
     )
-    parts = sorted(dest_dir.glob(f"{source.stem}_part*.m4a"))
+    parts = sorted(dest_dir.glob(f"{source.stem}_part*{source.suffix}"))
     if not parts:
         raise RuntimeError(f"No segments created for {source.name}")
     return parts
@@ -271,7 +292,20 @@ def _load_model(model_dir: Path):
     return model
 
 
-def transcribe_file(audio_path: Path, model) -> list[Segment]:
+def transcribe_file(
+    audio_path: Path, model, want_words: bool = False, progress=None
+) -> tuple[list[Segment], list[dict]]:
+    """Transcribe one audio file.
+
+    Returns the segments and, when `want_words` is set, one entry per word
+    with its own start/end in seconds. Those word times are what let the
+    speaker labels land on the right side of a fast exchange, so they are
+    only computed when we are about to diarize.
+
+    `progress`, when given, is called with the number of seconds of this file
+    that have been decoded so far. Whisper yields segments lazily, so this is
+    the only place that knows how far along a long recording is.
+    """
     beam_size = int(os.getenv("H9_BEAM_SIZE", "5"))
     vad_filter = _env_flag("H9_VAD", default=True)
 
@@ -284,24 +318,81 @@ def transcribe_file(audio_path: Path, model) -> list[Segment]:
         vad_filter=vad_filter,
         condition_on_previous_text=False,
         no_speech_threshold=0.6,
+        word_timestamps=want_words,
     )
-    return [
-        Segment(
-            start=int(segment.start * 1000),
-            end=int(segment.end * 1000),
-            text=segment.text,
+
+    segments: list[Segment] = []
+    words: list[dict] = []
+    for segment in whisper_segments:
+        if progress is not None:
+            progress(segment.end)
+        segments.append(
+            Segment(
+                start=int(segment.start * 1000),
+                end=int(segment.end * 1000),
+                text=segment.text,
+            )
         )
-        for segment in whisper_segments
-    ]
+        if not want_words or _is_hallucination(segment.text.strip()):
+            continue
+        for word in segment.words or []:
+            text = word.word.strip()
+            if text and word.start is not None and word.end is not None:
+                words.append({"text": text, "start": word.start, "end": word.end})
+    return segments, words
 
 
-def should_skip(source: Path, output: Path) -> bool:
-    return output.exists() and output.stat().st_mtime >= source.stat().st_mtime
+def should_skip(source: Path, output: Path, speakers_output: Path | None = None) -> bool:
+    if _env_flag("H9_FORCE", default=False):
+        return False
+    if not (output.exists() and output.stat().st_mtime >= source.stat().st_mtime):
+        return False
+    # A transcript produced before speaker labelling was switched on has no
+    # word timings stored anywhere, so the audio has to go through Whisper
+    # again to get them.
+    return speakers_output is None or speakers_output.exists()
+
+
+def label_speakers(source: Path, words: list[dict], output: Path) -> None:
+    """Write a second transcript where every turn is tagged Person 1, 2, ..."""
+    import faster_whisper
+
+    import diarization
+    import voice_id
+
+    if not words:
+        log("  no word timings available; skipping speaker labels")
+        return
+
+    log("  identifying speakers (first run downloads the NeMo models)...")
+    waveform = faster_whisper.decode_audio(
+        str(source), sampling_rate=diarization.SAMPLE_RATE
+    )
+    speaker_ts = diarization.diarize_waveform(waveform, num_speakers=NUM_SPEAKERS)
+    if not speaker_ts:
+        log("  the diarizer found no speech; skipping speaker labels")
+        return
+
+    me_cluster, scores = voice_id.identify_me(waveform, speaker_ts)
+    if scores:
+        detail = ", ".join(
+            f"voice {speaker}: {score:.2f}" for speaker, score in sorted(scores.items())
+        )
+        verdict = "no clear match" if me_cluster is None else f"you are voice {me_cluster}"
+        log(f"  compared with your enrolled sample ({detail}) - {verdict}")
+    elif not voice_id.EMBEDDING_FILE.is_file():
+        log("  no enrolled voice yet; Person 1 is whoever speaks first")
+
+    labels = diarization.person_labels(speaker_ts, me_cluster)
+    turns = diarization.build_turns(words, speaker_ts, labels)
+    diarization.write_turns(output, turns, with_timestamps=TURN_TIMESTAMPS)
+    log(f"  {len(labels)} voice(s) over {len(turns)} turns -> {output.name}")
 
 
 def transcribe_one(source: Path, model) -> None:
     output = OUTPUT_DIR / f"{source.stem}.txt"
-    if should_skip(source, output):
+    speakers_output = OUTPUT_DIR / f"{source.stem}.speakers.txt" if DIARIZE else None
+    if should_skip(source, output, speakers_output):
         log(f"SKIP {source.name} (output is up to date)")
         return
 
@@ -316,10 +407,16 @@ def transcribe_one(source: Path, model) -> None:
         parts = split_audio(source, segment_dir)
         log(f"  split into {len(parts)} segment(s)")
         all_segments: list[Segment] = []
+        all_words: list[dict] = []
         offset_ms = 0
         for index, part in enumerate(parts, start=1):
             log(f"  segment {index}/{len(parts)}: {part.name}")
-            segments = transcribe_file(part, model)
+            part_offset = offset_ms / 1000
+            segments, words = transcribe_file(
+                part, model, want_words=DIARIZE,
+                progress=lambda done, base=part_offset: emit_progress(
+                    (base + done) / duration),
+            )
             for segment in segments:
                 all_segments.append(
                     Segment(
@@ -329,23 +426,45 @@ def transcribe_one(source: Path, model) -> None:
                         translation=segment.translation,
                     )
                 )
+            # Word times are per part; shift them onto the full recording's
+            # clock, which is the one the diarizer works in.
+            offset_seconds = offset_ms / 1000
+            for word in words:
+                all_words.append(
+                    {
+                        "text": word["text"],
+                        "start": word["start"] + offset_seconds,
+                        "end": word["end"] + offset_seconds,
+                    }
+                )
             offset_ms += int(probe_duration_seconds(part) * 1000)
         shutil.rmtree(segment_dir, ignore_errors=True)
     else:
-        all_segments = transcribe_file(source, model)
+        all_segments, all_words = transcribe_file(
+            source, model, want_words=DIARIZE,
+            progress=lambda done: emit_progress(done / duration),
+        )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     _write_txt(output, all_segments)
+    emit_progress(1.0)
     log(f"DONE  {source.name} -> {output.name}")
+
+    if speakers_output is not None:
+        label_speakers(source, all_words, speakers_output)
 
 
 def main() -> int:
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    sources = sorted(INPUT_DIR.glob("*.m4a"))
+    sources = sorted(
+        (path for path in INPUT_DIR.iterdir()
+         if path.is_file() and path.suffix.lower() in AUDIO_SUFFIXES),
+        key=lambda path: path.name.lower(),
+    )
     if not sources:
-        log("No .m4a files found in input/. Drop files there and run again.")
+        log("No audio files found in input/. Drop files there and run again.")
         return 0
 
     try:
@@ -358,6 +477,10 @@ def main() -> int:
     except ImportError:
         log("WARNING: torch not installed")
 
+    if DIARIZE:
+        pinned = f"{NUM_SPEAKERS} people" if NUM_SPEAKERS else "speaker count auto-detected"
+        log(f"Speaker labels ON ({pinned}) -> extra .speakers.txt per file")
+
     model_dir = ensure_model()
 
     try:
@@ -366,12 +489,20 @@ def main() -> int:
         log(f"ERROR: {exc}")
         return 1
 
-    for source in sources:
-        try:
-            transcribe_one(source, model)
-        except Exception as exc:
-            log(f"ERROR {source.name}: {exc}")
-            return 1
+    try:
+        for source in sources:
+            try:
+                transcribe_one(source, model)
+            except Exception as exc:
+                log(f"ERROR {source.name}: {exc}")
+                return 1
+    finally:
+        if DIARIZE:
+            import diarization
+            import voice_id
+
+            diarization.release()
+            voice_id.release()
 
     log("All files processed.")
     return 0
