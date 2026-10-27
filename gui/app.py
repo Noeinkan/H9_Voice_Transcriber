@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -25,6 +26,10 @@ PRECISIONS = {"Low VRAM (int8)": "int8", "Sharper (float16)": "float16"}
 # two on a noisy recording.
 SPEAKER_MODES = {"Off": None, "Auto": 0, "2 people": 2, "3 people": 3, "4 people": 4}
 LOG_LINE_CAP = 1500
+# The time-left estimate stays quiet until the run has shown its real pace.
+ETA_WARMUP_SECONDS = 20
+# Stand-in length for a file ffprobe could not measure.
+UNKNOWN_FILE_SECONDS = 600.0
 
 
 def enable_dpi_awareness() -> None:
@@ -55,8 +60,16 @@ class App(tk.Tk):
         self._set_icon()
 
         self.runner = Runner()
-        self._completed = 0
-        self._total = 0
+        # Run progress is measured in seconds of audio, not in files: a
+        # 55-minute recording and a 1-minute one are not one step each, and
+        # up-to-date files cost nothing.
+        self._weights: dict[str, float] = {}
+        self._uncounted: set[str] = set()
+        self._done_weight = 0.0
+        self._total_weight = 0.0
+        self._eta_clock: tuple[float, float] | None = None
+        self._stage_text = "Idle"
+        self._eta_text = ""
         self._segment = (0, 0)
         self._file_fraction = 0.0
         self._current_file = ""
@@ -73,6 +86,9 @@ class App(tk.Tk):
         self._ui_queue: queue.Queue = queue.Queue()
 
         self._build()
+        self._force.trace_add("write", lambda *_: self._on_files_changed())
+        self._speakers.trace_add("write", lambda *_: self.files.set_diarize(
+            SPEAKER_MODES.get(self._speakers.get()) is not None))
         self.files.refresh()
         self._refresh_checks()
         preflight.probe_gpu(lambda check: self._post(self._set_gpu_chip, check))
@@ -95,7 +111,7 @@ class App(tk.Tk):
 
         self.files = FileList(root, on_change=self._on_files_changed)
         self.files.grid(row=3, column=0, sticky="nsew")
-        self.files.tree.bind("<Double-1>", self._open_selected_transcript)
+        self.files.tree.bind("<Double-1>", self._open_selected_transcript, add="+")
         self.files.tree.bind("<Button-3>", self._show_context_menu)
         self._build_context_menu()
 
@@ -139,6 +155,9 @@ class App(tk.Tk):
 
         buttons = ttk.Frame(bar, style="App.TFrame")
         buttons.grid(row=0, column=1, sticky="e")
+        self.up_to_date_toggle = self._small_button(
+            buttons, "Show up to date", lambda: self.files.toggle_up_to_date())
+        self.up_to_date_toggle.pack(side="left", padx=(0, 6))
         self._small_button(buttons, "Add audio...", self._add_files).pack(side="left", padx=(0, 6))
         self._small_button(buttons, "Refresh", self.files_refresh).pack(side="left", padx=(0, 6))
         self._small_button(buttons, "Open input folder",
@@ -328,7 +347,9 @@ class App(tk.Tk):
         if not chosen:
             return
         paths.INPUT_DIR.mkdir(parents=True, exist_ok=True)
-        self._set_stage("Copying " + str(len(chosen)) + " file(s) into input...")
+        # During a run the status line belongs to the run.
+        if not self.runner.is_running():
+            self._set_stage("Copying " + str(len(chosen)) + " file(s) into input...")
 
         def work() -> None:
             failures: list[str] = []
@@ -347,9 +368,9 @@ class App(tk.Tk):
         self.files.refresh()
         if failures:
             messagebox.showerror("Could not copy every file", "\n".join(failures), parent=self)
-            self._set_stage("Some files could not be copied")
-        else:
-            self._set_stage("Idle")
+        if self.runner.is_running():
+            return
+        self._set_stage("Some files could not be copied" if failures else "Idle")
 
     def _start(self) -> None:
         if self.runner.is_running():
@@ -368,9 +389,15 @@ class App(tk.Tk):
             return
 
         force = self._force.get()
-        self.files.reset_pending(force)
-        self._total = self.files.counts()["total"]
-        self._completed = 0
+        work = self.files.begin_run(force)
+        known = [s for s in map(self.files.seconds, work) if s]
+        fallback = sum(known) / len(known) if known else UNKNOWN_FILE_SECONDS
+        self._weights = {name: self.files.seconds(name) or fallback for name in work}
+        self._uncounted = set(work)
+        self._done_weight = 0.0
+        self._total_weight = sum(self._weights.values())
+        self._eta_clock = None
+        self._eta_text = ""
         self._segment = (0, 0)
         self._file_fraction = 0.0
         self._current_file = ""
@@ -389,6 +416,8 @@ class App(tk.Tk):
         try:
             self.runner.start(options)
         except (OSError, RuntimeError) as exc:
+            self.files.end_run()
+            self.files.refresh()
             messagebox.showerror("Could not start", str(exc), parent=self)
             return
 
@@ -410,10 +439,30 @@ class App(tk.Tk):
         self.runner.stop()
 
     def _set_running(self, running: bool) -> None:
-        self.start_button.configure(state="disabled" if running else "normal")
         self.stop_button.configure(state="normal" if running else "disabled")
         for widget in self._option_widgets:
             widget.configure(state="disabled" if running else "readonly")
+        if running:
+            self.start_button.configure(state="disabled")
+        else:
+            self._update_start_button()
+
+    def _update_start_button(self) -> None:
+        """Say what Start will do: how many files, how much audio."""
+        if self.runner.is_running():
+            return
+        if self.files.is_empty():
+            self.start_button.configure(text="Start transcription", state="normal")
+            return
+        work = self.files.to_do(self._force.get())
+        if not work:
+            self.start_button.configure(text="Nothing new to transcribe", state="disabled")
+            return
+        text = "Transcribe %d file%s" % (len(work), "" if len(work) == 1 else "s")
+        lengths = [self.files.seconds(name) for name in work]
+        if all(lengths):
+            text += "  (" + _span(sum(lengths)) + ")"
+        self.start_button.configure(text=text, state="normal")
 
     # ==================================================================
     # event pump
@@ -446,13 +495,22 @@ class App(tk.Tk):
             self._download_mode = False
             self.files.set_status(event.name, event.status, event.detail)
             if event.status == "working":
+                if event.name not in self._weights:
+                    # The transcriber judged this file differently from the
+                    # window; count it now rather than let the bar overshoot.
+                    weight = self.files.seconds(event.name) or UNKNOWN_FILE_SECONDS
+                    self._weights[event.name] = weight
+                    self._uncounted.add(event.name)
+                    self._total_weight += weight
                 self._segment = (0, 0)
                 self._file_fraction = 0.0
                 self._current_file = event.name
                 self.visual.set_file(paths.INPUT_DIR / event.name)
-                self._set_stage("Transcribing " + event.name)
+                self._set_stage(self._working_stage())
             elif event.status in ("done", "skipped", "error"):
-                self._completed += 1
+                if event.name in self._uncounted:
+                    self._uncounted.discard(event.name)
+                    self._done_weight += self._weights[event.name]
                 self._segment = (0, 0)
                 self._file_fraction = 0.0
                 self._current_file = ""
@@ -472,7 +530,11 @@ class App(tk.Tk):
             if "segment" in event.data:
                 self._segment = (event.data["segment"], event.data["segments"])
                 self._update_progress()
-            self._set_stage(event.text)
+            if self._current_file and ("segment" in event.data
+                                       or event.data.get("transcribing")):
+                self._set_stage(self._working_stage())
+            else:
+                self._set_stage(event.text)
 
         elif event.kind == "progress":
             self._download_mode = False
@@ -488,9 +550,10 @@ class App(tk.Tk):
             self._finish(event.data.get("code", 0), event.data.get("stopped", False))
 
     def _finish(self, code: int, stopped: bool) -> None:
-        self._set_running(False)
-        self.files.clear_working()
+        self._eta_text = ""
+        self.files.end_run()
         self.files.refresh()
+        self._set_running(False)
         self._refresh_checks()
 
         # Let the playhead run out before the panel goes away.
@@ -519,14 +582,52 @@ class App(tk.Tk):
                 self._toggle_log()
 
     def _update_progress(self) -> None:
-        """Whole-run progress: finished files plus how far into the current one."""
+        """Whole-run progress, in seconds of audio: finished files plus how far
+        into the current one."""
         if self._download_mode:
             return
-        done = self._completed + self._file_fraction
-        self.progress.set_fraction(min(1.0, done / max(self._total, 1)))
+        processed = self._done_weight
+        if self._current_file in self._uncounted:
+            processed += self._weights[self._current_file] * self._file_fraction
+        self.progress.set_fraction(min(1.0, processed / max(self._total_weight, 1.0)))
+        self._update_eta(processed)
+
+    def _update_eta(self, processed: float) -> None:
+        """Time left at the pace seen so far. The clock starts on the first
+        real progress, so the model load does not count as slowness."""
+        if not self.runner.is_running():
+            return
+        now = time.monotonic()
+        if self._eta_clock is None:
+            self._eta_clock = (now, processed)
+            return
+        since, baseline = self._eta_clock
+        elapsed, gained = now - since, processed - baseline
+        if elapsed < ETA_WARMUP_SECONDS or gained <= 0:
+            return
+        left = (self._total_weight - processed) * elapsed / gained
+        self._eta_text = _time_left(left)
+        self._render_stage()
+
+    def _working_stage(self) -> str:
+        text = "Transcribing " + self._current_file
+        index, parts = self._segment
+        if parts > 1:
+            text += f"  -  part {index} of {parts}"
+        return text
 
     def _on_files_changed(self) -> None:
         counts = self.files.counts()
+        resting = counts["skipped"]
+        if not resting:
+            self.up_to_date_toggle.configure(text="Show up to date", state="disabled")
+        elif self.files.show_up_to_date:
+            self.up_to_date_toggle.configure(text="Hide up to date", state="normal")
+        else:
+            self.up_to_date_toggle.configure(text=f"Show up to date ({resting})",
+                                             state="normal")
+        self._update_start_button()
+
         if counts["total"] == 0:
             self.count_label.configure(text="")
             return
@@ -537,6 +638,8 @@ class App(tk.Tk):
             parts.append(str(counts["skipped"]) + " up to date")
         if counts["error"]:
             parts.append(str(counts["error"]) + " failed")
+        if counts["later"]:
+            parts.append(str(counts["later"]) + " next run")
         self.count_label.configure(text="   .   ".join(parts))
 
     # ==================================================================
@@ -618,6 +721,13 @@ class App(tk.Tk):
     # window plumbing
     # ==================================================================
     def _set_stage(self, text: str) -> None:
+        self._stage_text = text
+        self._render_stage()
+
+    def _render_stage(self) -> None:
+        text = self._stage_text
+        if self._eta_text and self.runner.is_running():
+            text += "   ·   " + self._eta_text
         self.stage_label.configure(text=text)
 
     def _apply_dpi_scaling(self) -> float:
@@ -666,6 +776,19 @@ def _open(target: Path) -> None:
         subprocess.Popen(["open", str(target)])
     else:
         subprocess.Popen(["xdg-open", str(target)])
+
+
+def _span(seconds: float) -> str:
+    """Audio length for the Start button: '45 min', '1 h 46 min'."""
+    minutes = max(1, round(seconds / 60))
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} h {minutes:02d} min" if hours else f"{minutes} min"
+
+
+def _time_left(seconds: float) -> str:
+    if seconds < 60:
+        return "under a minute left"
+    return "about " + _span(seconds) + " left"
 
 
 def _tooltip(widget, text: str) -> None:

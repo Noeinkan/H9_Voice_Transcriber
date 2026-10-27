@@ -25,6 +25,8 @@ Nothing leaves your machine — the model runs locally.
 | **Precision** | `Low VRAM (int8)` is the safe default on a 4 GB card. `Sharper (float16)` is better when you have VRAM to spare. |
 | **Speakers** | `Auto` by default: the transcript comes out split into turns tagged `Person 1` / `Person 2`, and the clustering counts the voices itself. Pick `2 people` for an interview when you already know the count — it is more reliable than guessing. `Off` gives one unbroken block of text and skips the extra pass over the audio. See [Telling the voices apart](#telling-the-voices-apart) — including how to make yourself Person 1. |
 | **Redo files already transcribed** | Off by default: files whose `.txt` is newer than the audio are skipped. Tick it to transcribe them again. |
+| **Start** | Names the work before you press it — `Transcribe 3 files (1 h 46 min)` — and reads `Nothing new to transcribe` when every file is up to date. During a run the status line adds an estimate (`about 12 min left`) once the pace is known. |
+| **Show up to date** | Up-to-date files are hidden by default so the file being worked on stays in view; this brings them back. Files added during a run show as `Next run`. |
 | **Stop** | Kills the transcription and the ffmpeg processes under it. Files already finished keep their transcripts. |
 | **Show details** | Opens the live log — the same lines that go into `transcripts.log`. It opens by itself if a run fails. |
 | Right-click a row | Open transcript · Show audio in Explorer · Remove from input folder. |

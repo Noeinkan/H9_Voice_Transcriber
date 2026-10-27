@@ -209,7 +209,8 @@ class Runner:
         elif stripped.startswith("Downloading large-v3"):
             self.events.put(Event(kind="stage", text="Downloading the model (one time, ~3 GB)"))
         elif stripped.startswith("transcribing") or stripped.startswith("  transcribing"):
-            self.events.put(Event(kind="stage", text="Transcribing..."))
+            self.events.put(Event(kind="stage", text="Transcribing...",
+                                  data={"transcribing": True}))
         elif stripped.startswith("identifying speakers"):
             # Runs after the file is already marked Done, so say what it is
             # doing or the window looks stalled for a minute.

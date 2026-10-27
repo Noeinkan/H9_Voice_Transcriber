@@ -38,9 +38,11 @@ the file's **first line** (`is_labelled`). Change how `write_turns` opens a
 turn and nothing raises: every recording just looks unlabelled forever and is
 re-transcribed on every run.
 
-**`AUDIO_SUFFIXES` and the 500 MB "model is ready" threshold are written out
-twice**, in `transcribe.py` and in `gui/paths.py`. Change one, change the other,
-or the queue lists files the transcriber ignores.
+**`AUDIO_SUFFIXES`, the 500 MB "model is ready" threshold and
+`_LABELLED_FIRST_LINE` are written out twice**, in `transcribe.py` and in
+`gui/paths.py`. Change one, change the other, or the queue lists files the
+transcriber ignores, or promises to skip files it then redoes (and the Start
+button and progress bar size the run wrong).
 
 ## Verifying
 

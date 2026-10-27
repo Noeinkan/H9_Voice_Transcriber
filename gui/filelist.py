@@ -16,6 +16,7 @@ STATUS_LABEL = {
     "done": "Done",
     "skipped": "Up to date",
     "error": "Failed",
+    "later": "Next run",
 }
 STATUS_COLOUR = {
     "queued": theme.MUTED,
@@ -23,8 +24,10 @@ STATUS_COLOUR = {
     "done": theme.SUCCESS,
     "skipped": theme.FAINT,
     "error": theme.DANGER,
+    "later": theme.FAINT,
 }
 _EMPTY_ROW = "__empty__"
+_HIDDEN_ROW = "__hidden__"
 
 
 class FileList(ttk.Frame):
@@ -35,9 +38,14 @@ class FileList(ttk.Frame):
         self._on_change = on_change
         self._status: dict[str, str] = {}
         self._detail: dict[str, str] = {}
-        self._durations: dict[str, str] = {}
+        self._seconds: dict[str, float | None] = {}
         self._paths: dict[str, Path] = {}
         self._probing = False
+        self._diarize = True
+        # The names transcribe.py listed when the run began. It reads input/
+        # once, so anything added after that waits for the next run.
+        self._run_names: set[str] | None = None
+        self.show_up_to_date = False
 
         self.tree = ttk.Treeview(
             self,
@@ -59,6 +67,8 @@ class FileList(ttk.Frame):
         for status, colour in STATUS_COLOUR.items():
             self.tree.tag_configure(status, foreground=colour)
         self.tree.tag_configure(_EMPTY_ROW, foreground=theme.FAINT)
+        self.tree.tag_configure(_HIDDEN_ROW, foreground=theme.FAINT)
+        self.tree.bind("<Double-1>", self._on_hidden_row, add="+")
 
         scroll = ttk.Scrollbar(self, orient="vertical", style="Vert.Vertical.TScrollbar",
                                command=self.tree.yview)
@@ -79,15 +89,27 @@ class FileList(ttk.Frame):
                 self._status.pop(name, None)
                 self._detail.pop(name, None)
         for name, path in self._paths.items():
-            if name not in self._status:
-                up_to_date = paths.transcript_for(path).exists() and \
-                    paths.transcript_for(path).stat().st_mtime >= path.stat().st_mtime
-                self._status[name] = "skipped" if up_to_date else "queued"
-                self._detail[name] = "already up to date" if up_to_date else ""
+            if name in self._status:
+                continue
+            if self._run_names is not None and name not in self._run_names:
+                self._status[name] = "later"
+                self._detail[name] = ""
+            elif paths.is_up_to_date(path, self._diarize):
+                self._status[name] = "skipped"
+                self._detail[name] = "already up to date"
+            else:
+                self._status[name] = "queued"
+                self._detail[name] = ""
         self._redraw()
         self._probe_durations(files)
-        if self._on_change:
-            self._on_change()
+        self._changed()
+
+    def set_diarize(self, diarize: bool) -> None:
+        """Speaker labels change what counts as up to date: re-judge idle rows."""
+        self._diarize = diarize
+        for name in [n for n, s in self._status.items() if s in ("queued", "skipped")]:
+            del self._status[name]
+        self.refresh()
 
     def _redraw(self) -> None:
         selection = set(self.tree.selection())
@@ -97,21 +119,42 @@ class FileList(ttk.Frame):
                              values=("No audio yet - use Add audio... or drop files into the input folder",
                                      "", "", ""))
             return
-        for name, path in self._paths.items():
-            status = self._status.get(name, "queued")
-            label = STATUS_LABEL.get(status, status)
-            detail = self._detail.get(name, "")
-            if status in ("working", "error") and detail:
-                label = f"{label} — {detail}" if status == "error" else detail.capitalize()
-            self.tree.insert("", "end", iid=name, tags=(status,), values=(
-                name,
-                _human_size(path),
-                self._durations.get(name, "—"),
-                label,
-            ))
+        # Up-to-date files sink to the bottom (or out of sight): on a folder
+        # that has been in use a while they are most of the list, and they
+        # pushed the file actually being worked on off screen.
+        active = [n for n in self._paths if self._status.get(n) != "skipped"]
+        resting = [n for n in self._paths if self._status.get(n) == "skipped"]
+        for name in active + (resting if self.show_up_to_date else []):
+            self._insert(name)
+        if resting and not self.show_up_to_date:
+            self.tree.insert("", "end", iid=_HIDDEN_ROW, tags=(_HIDDEN_ROW,), values=(
+                f"+ {len(resting)} up-to-date file(s) hidden - double-click to show",
+                "", "", ""))
         for iid in selection:
             if self.tree.exists(iid):
                 self.tree.selection_add(iid)
+
+    def _insert(self, name: str) -> None:
+        status = self._status.get(name, "queued")
+        label = STATUS_LABEL.get(status, status)
+        detail = self._detail.get(name, "")
+        if status in ("working", "error") and detail:
+            label = f"{label} — {detail}" if status == "error" else detail.capitalize()
+        self.tree.insert("", "end", iid=name, tags=(status,), values=(
+            name,
+            _human_size(self._paths[name]),
+            format_duration(self._seconds.get(name)),
+            label,
+        ))
+
+    def _on_hidden_row(self, event) -> None:
+        if self.tree.identify_row(event.y) == _HIDDEN_ROW:
+            self.toggle_up_to_date()
+
+    def toggle_up_to_date(self) -> None:
+        self.show_up_to_date = not self.show_up_to_date
+        self._redraw()
+        self._changed()
 
     def set_status(self, name: str, status: str, detail: str = "") -> None:
         if name not in self._paths:
@@ -119,37 +162,42 @@ class FileList(ttk.Frame):
         self._status[name] = status
         self._detail[name] = detail
         self._redraw()
-        if self._on_change:
-            self._on_change()
+        if status == "working" and self.tree.exists(name):
+            self.tree.see(name)
+        self._changed()
 
-    def reset_pending(self, force: bool) -> None:
-        """Before a run: everything that will be processed goes back to queued."""
+    def begin_run(self, force: bool) -> list[str]:
+        """Before a run: queue what will be processed and return those names."""
+        self._run_names = set(self._paths)
+        work: list[str] = []
         for name, path in self._paths.items():
-            transcript = paths.transcript_for(path)
-            up_to_date = transcript.exists() and \
-                transcript.stat().st_mtime >= path.stat().st_mtime
-            if force or not up_to_date:
+            if force or not paths.is_up_to_date(path, self._diarize):
                 self._status[name] = "queued"
                 self._detail[name] = ""
+                work.append(name)
+            else:
+                self._status[name] = "skipped"
+                self._detail[name] = "already up to date"
         self._redraw()
-        if self._on_change:
-            self._on_change()
+        self._changed()
+        return work
 
-    def clear_working(self) -> None:
-        """After a stop, a half-finished row must not stay stuck on a percentage."""
-        changed = False
+    def end_run(self) -> None:
+        """Rows that sat out the run, or were cut off by Stop, get judged again."""
+        self._run_names = None
         for name, status in list(self._status.items()):
-            if status == "working":
-                self._status[name] = "queued"
-                self._detail[name] = ""
-                changed = True
-        if changed:
-            self._redraw()
+            if status in ("later", "working"):
+                del self._status[name]
+                self._detail.pop(name, None)
 
     def set_progress_text(self, name: str, text: str) -> None:
         """Update just the status cell - a full redraw per progress tick is waste."""
         if self.tree.exists(name):
             self.tree.set(name, "status", text)
+
+    def _changed(self) -> None:
+        if self._on_change:
+            self._on_change()
 
     # -- queries ----------------------------------------------------------
     def counts(self) -> dict[str, int]:
@@ -159,6 +207,15 @@ class FileList(ttk.Frame):
         tally["total"] = len(self._paths)
         return tally
 
+    def to_do(self, force: bool) -> list[str]:
+        """Names the next run would transcribe, in the order it takes them."""
+        return [name for name, path in self._paths.items()
+                if force or not paths.is_up_to_date(path, self._diarize)]
+
+    def seconds(self, name: str) -> float | None:
+        """Audio length in seconds, or None until ffprobe has answered."""
+        return self._seconds.get(name)
+
     def selected_paths(self) -> list[Path]:
         return [self._paths[iid] for iid in self.tree.selection() if iid in self._paths]
 
@@ -167,13 +224,13 @@ class FileList(ttk.Frame):
 
     # -- durations, probed off the main loop ------------------------------
     def _probe_durations(self, files: list[Path]) -> None:
-        pending = [f for f in files if f.name not in self._durations]
+        pending = [f for f in files if f.name not in self._seconds]
         if not pending or self._probing:
             return
 
         def work() -> None:
             for path in pending:
-                self._durations[path.name] = _probe(path)
+                self._seconds[path.name] = _probe(path)
             self._probing = False
 
         self._probing = True
@@ -186,6 +243,18 @@ class FileList(ttk.Frame):
             self.after(250, self._watch_probe)
             return
         self._redraw()
+        # The Start button quotes the total length, so it needs telling too.
+        self._changed()
+
+
+def format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
 
 
 def _human_size(path: Path) -> str:
@@ -198,7 +267,7 @@ def _human_size(path: Path) -> str:
     return f"{megabytes:.0f} MB"
 
 
-def _probe(path: Path) -> str:
+def _probe(path: Path) -> float | None:
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -206,11 +275,6 @@ def _probe(path: Path) -> str:
             capture_output=True, text=True, timeout=25,
             creationflags=0x08000000 if os.name == "nt" else 0,
         )
-        seconds = float(result.stdout.strip())
+        return float(result.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
-        return "—"
-    minutes, secs = divmod(int(seconds), 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes}:{secs:02d}"
+        return None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -70,3 +71,22 @@ def audio_files(folder: Path = INPUT_DIR) -> list[Path]:
 
 def transcript_for(source: Path) -> Path:
     return OUTPUT_DIR / f"{source.stem}.txt"
+
+
+# Mirrors transcribe.py's _LABELLED_FIRST_LINE: change one, change the other,
+# or the window promises to skip files the transcriber then redoes.
+_LABELLED_FIRST_LINE = re.compile(r"^(?:\[\d+:\d{2}(?::\d{2})?\] )?Person \d+: ")
+
+
+def is_up_to_date(source: Path, diarize: bool) -> bool:
+    """The window's copy of transcribe.should_skip, minus H9_FORCE."""
+    transcript = transcript_for(source)
+    try:
+        if transcript.stat().st_mtime < source.stat().st_mtime:
+            return False
+        if not diarize:
+            return True
+        with transcript.open(encoding="utf-8") as handle:
+            return bool(_LABELLED_FIRST_LINE.match(handle.readline()))
+    except OSError:
+        return False
