@@ -14,6 +14,7 @@ out of the same pass.
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
@@ -31,6 +32,7 @@ BATCH_SIZE = int(os.getenv("H9_DIAR_BATCH", "24"))
 
 # NeuralDiarizer takes ~20s to build, so keep one instance for the whole run.
 _DIARIZER = None
+_DIARIZER_DEVICE = None
 
 
 def _silence_nemo() -> None:
@@ -51,13 +53,20 @@ def default_device() -> str:
 
 
 def _load_diarizer(device: str):
-    global _DIARIZER
+    global _DIARIZER, _DIARIZER_DEVICE
+    if _DIARIZER is not None and _DIARIZER_DEVICE != device:
+        release()
     if _DIARIZER is None:
         from nemo.collections.asr.models.msdd_models import NeuralDiarizer
         from whisper_diarization.diarization.msdd.msdd import create_config
 
         _silence_nemo()
-        _DIARIZER = NeuralDiarizer(cfg=create_config()).to(device)
+        config = create_config()
+        # NeMo also loads its VAD and speaker models through cfg.device.
+        # Moving only the outer module leaves those models on CUDA.
+        config.device = device
+        _DIARIZER = NeuralDiarizer(cfg=config).to(device)
+        _DIARIZER_DEVICE = device
     return _DIARIZER
 
 
@@ -148,10 +157,12 @@ def diarize_waveform(
 
 def release() -> None:
     """Free the diarizer's VRAM once every file has been processed."""
-    global _DIARIZER
+    global _DIARIZER, _DIARIZER_DEVICE
     if _DIARIZER is None:
         return
     _DIARIZER = None
+    _DIARIZER_DEVICE = None
+    gc.collect()
     try:
         import torch
 

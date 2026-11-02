@@ -198,7 +198,7 @@ run.bat         unattended batch run
 | The desktop icon does nothing | The first launch builds the environment silently for several minutes. If it still does nothing, run `H9 Transcriber.bat` directly from Explorer to see the error. |
 | `ffmpeg` chip is red | Install it with `winget install Gyan.FFmpeg`, then close every terminal, open a new one, and start the app again so it picks up the new PATH. |
 | CUDA not available | Update NVIDIA drivers, then reinstall the CUDA PyTorch wheels above |
-| Out of memory | Set **Precision** to `Low VRAM (int8)` and close other GPU apps |
+| Out of memory | Set **Precision** to `Low VRAM (int8)` and close other GPU apps. Speaker identification for recordings of 90 minutes or more runs on CPU to avoid GPU memory exhaustion; it can take longer. Shorter recordings retry speaker identification on CPU if CUDA runs out of memory. |
 | Slow first run | Model download plus the first GPU compile are one-time costs |
 | One person split across `Person 1` and `Person 3` | Re-run with the count pinned: `run.bat --speakers 2` |
 | `Person 1` is the other person, not you | Enroll your voice (`enroll_voice.bat`). If you already did, check `transcripts.log`: it prints the match score per voice, and anything under 0.35 means the sample and the recording sound too different — re-record the sample on the device you actually use for interviews |

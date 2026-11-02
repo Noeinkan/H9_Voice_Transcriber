@@ -44,6 +44,9 @@ LOG_FILE = ROOT / "transcripts.log"
 MODEL_DIR = ROOT / "models" / "large-v3"
 
 SEGMENT_SECONDS = 30 * 60
+# NeMo's whole-recording speaker pass can need several GiB beyond Whisper.
+# Use system RAM for long recordings rather than exhausting an 8 GiB GPU.
+CPU_DIARIZATION_SECONDS = 90 * 60
 AUDIO_SUFFIXES = (".m4a", ".mp3", ".wav", ".mp4", ".aac", ".flac", ".ogg",
                   ".opus", ".wma", ".mov", ".mkv", ".webm")
 HF_BASE = "https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main"
@@ -369,7 +372,8 @@ def should_skip(source: Path, output: Path) -> bool:
     return not DIARIZE or is_labelled(output)
 
 
-def label_speakers(source: Path, words: list[dict], output: Path) -> None:
+def label_speakers(source: Path, words: list[dict], output: Path,
+                   duration: float) -> None:
     """Rewrite the transcript with every turn tagged Person 1, 2, ...
 
     Replaces the plain transcript `transcribe_one` has already written. That
@@ -389,12 +393,29 @@ def label_speakers(source: Path, words: list[dict], output: Path) -> None:
     waveform = faster_whisper.decode_audio(
         str(source), sampling_rate=diarization.SAMPLE_RATE
     )
-    speaker_ts = diarization.diarize_waveform(waveform, num_speakers=NUM_SPEAKERS)
+    device = "cpu" if duration >= CPU_DIARIZATION_SECONDS else diarization.default_device()
+    if device == "cpu" and diarization.default_device() == "cuda":
+        log("  long recording: identifying speakers on CPU to avoid GPU memory exhaustion")
+    try:
+        speaker_ts = diarization.diarize_waveform(
+            waveform, num_speakers=NUM_SPEAKERS, device=device
+        )
+    except Exception as exc:
+        import torch
+
+        if device != "cuda" or not isinstance(exc, torch.cuda.OutOfMemoryError):
+            raise
+        log("  GPU memory exhausted during speaker identification; retrying on CPU")
+        diarization.release()
+        speaker_ts = diarization.diarize_waveform(
+            waveform, num_speakers=NUM_SPEAKERS, device="cpu"
+        )
+        device = "cpu"
     if not speaker_ts:
         log("  the diarizer found no speech; skipping speaker labels")
         return
 
-    me_cluster, scores = voice_id.identify_me(waveform, speaker_ts)
+    me_cluster, scores = voice_id.identify_me(waveform, speaker_ts, device=device)
     if scores:
         detail = ", ".join(
             f"voice {speaker}: {score:.2f}" for speaker, score in sorted(scores.items())
@@ -471,7 +492,7 @@ def transcribe_one(source: Path, model) -> None:
     log(f"DONE  {source.name} -> {output.name}")
 
     if DIARIZE:
-        label_speakers(source, all_words, output)
+        label_speakers(source, all_words, output, duration)
 
 
 def main() -> int:
