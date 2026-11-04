@@ -46,6 +46,75 @@ def _silence_nemo() -> None:
         pass
 
 
+def _nearest_anchor_mapping(timestamps_in_scales):
+    """Drop-in for NeMo's `get_argmin_mat`, without its all-pairs grid.
+
+    For every base-scale segment, NeMo finds the closest segment of each other
+    scale by building a full (base x scale) distance matrix. On a 3-hour
+    recording that is ~33,000 x 33,000 numbers per scale: 4+ GiB on the GPU
+    (out of memory on 8 GiB) or ~13 GB of RAM on CPU (swapping for hours).
+    A sorted lookup returns the same indices in a few MB.
+    """
+    import torch
+
+    anchors = [torch.mean(ts, dim=1) for ts in timestamps_in_scales]
+    base = anchors[-1]
+    mappings = []
+    for curr in anchors:
+        order = torch.argsort(curr, stable=True)
+        ordered = curr[order]
+        last = ordered.shape[0] - 1
+        right = torch.searchsorted(ordered, base).clamp(max=last)
+        left = (right - 1).clamp(min=0)
+        pick_right = (ordered[right] - base).abs() < (ordered[left] - base).abs()
+        nearest = torch.where(pick_right, right, left)
+        # Like argmin, a tie between equal anchors goes to the first of them.
+        nearest = torch.searchsorted(ordered, ordered[nearest])
+        mappings.append(order[nearest])
+    return mappings
+
+
+def _patch_nemo_scale_mapping() -> None:
+    from nemo.collections.asr.data import audio_to_diar_label
+    from nemo.collections.asr.parts.utils import offline_clustering, speaker_utils
+
+    # The two other modules imported the function by name, so patch each copy.
+    for module in (offline_clustering, speaker_utils, audio_to_diar_label):
+        module.get_argmin_mat = _nearest_anchor_mapping
+
+
+MSDD_WINDOWS_PER_PASS = int(os.getenv("H9_DIAR_WINDOWS", "64"))
+
+
+def _chunk_msdd_inference(diarizer) -> None:
+    """Feed MSDD its windows a group at a time instead of all at once.
+
+    With split_infer on, NeMo cuts the recording into 50-step windows but then
+    pushes every window through the network in one call, so memory grows with
+    the recording: a 3-hour meeting asks for 13+ GiB. Windows are independent
+    rows of that batch, so running them in groups gives the same predictions.
+    """
+    import torch
+
+    msdd = diarizer.msdd_model
+    whole = msdd.forward_infer
+
+    def forward_infer(input_signal, input_signal_length, emb_vectors, targets):
+        step = MSDD_WINDOWS_PER_PASS
+        if targets is not None or input_signal.shape[0] <= step:
+            return whole(input_signal, input_signal_length, emb_vectors, targets)
+        preds, weights = [], []
+        for start in range(0, input_signal.shape[0], step):
+            part = slice(start, start + step)
+            p, w = whole(input_signal[part], input_signal_length[part],
+                         emb_vectors[part], None)
+            preds.append(p)
+            weights.append(w)
+        return torch.cat(preds), torch.cat(weights)
+
+    msdd.forward_infer = forward_infer
+
+
 def default_device() -> str:
     import torch
 
@@ -61,11 +130,13 @@ def _load_diarizer(device: str):
         from whisper_diarization.diarization.msdd.msdd import create_config
 
         _silence_nemo()
+        _patch_nemo_scale_mapping()
         config = create_config()
         # NeMo also loads its VAD and speaker models through cfg.device.
         # Moving only the outer module leaves those models on CUDA.
         config.device = device
         _DIARIZER = NeuralDiarizer(cfg=config).to(device)
+        _chunk_msdd_inference(_DIARIZER)
         _DIARIZER_DEVICE = device
     return _DIARIZER
 

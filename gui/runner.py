@@ -41,6 +41,7 @@ class Options:
     force: bool = False
     diarize: bool = False
     speakers: int = 0              # 0 = let the clustering decide
+    timestamps: bool = True        # [mm:ss] at the start of every turn
 
     def env(self) -> dict[str, str]:
         environment = dict(os.environ)
@@ -53,6 +54,7 @@ class Options:
             # H9_DIARIZE from whatever launched the window.
             H9_DIARIZE="1" if self.diarize else "0",
             H9_SPEAKERS=str(self.speakers if self.diarize else 0),
+            H9_TIMESTAMPS="1" if self.timestamps else "0",
             H9_PROGRESS="1",
             PYTHONUNBUFFERED="1",
             PYTHONIOENCODING="utf-8",

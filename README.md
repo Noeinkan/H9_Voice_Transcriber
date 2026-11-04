@@ -170,7 +170,7 @@ Environment variables read by `transcribe.py`, all set for you by the window:
 | `H9_FORCE` | off | Re-transcribe files that already have an up-to-date `.txt` |
 | `H9_DIARIZE` | **on** | Split `<name>.txt` into Person 1 / Person 2 turns. Set to `0` (`run.bat --no-speakers`) for one unbroken block of text |
 | `H9_SPEAKERS` | auto | How many people are in the recording, when you know it |
-| `H9_TIMESTAMPS` | off | Prefix every speaker turn with `[mm:ss]` |
+| `H9_TIMESTAMPS` | on | Prefix every speaker turn (or paragraph, without speaker labels) with `[mm:ss]` |
 | `H9_PROGRESS` | off | Print `@progress <percent>` lines on stdout for the window's playhead. They never reach `transcripts.log`, and `run.bat` leaves this unset so its console output is unchanged. |
 
 ## Layout

@@ -77,6 +77,7 @@ class App(tk.Tk):
         self._settle_job = None
         self._log_visible = tk.BooleanVar(value=False)
         self._force = tk.BooleanVar(value=False)
+        self._timestamps = tk.BooleanVar(value=True)
         self._quality = tk.StringVar(value="Balanced")
         self._precision = tk.StringVar(value="Low VRAM (int8)")
         self._speakers = tk.StringVar(value="Auto")
@@ -187,6 +188,9 @@ class App(tk.Tk):
         ttk.Checkbutton(options, text="Redo files already transcribed",
                         style="Card.TCheckbutton",
                         variable=self._force).pack(side="right")
+        ttk.Checkbutton(options, text="Timestamps",
+                        style="Card.TCheckbutton",
+                        variable=self._timestamps).pack(side="right", padx=(0, 14))
 
         self._option_label(options, "Quality").pack(side="left", padx=(0, 6))
         quality = ttk.Combobox(options, textvariable=self._quality, state="readonly",
@@ -412,6 +416,7 @@ class App(tk.Tk):
             force=force,
             diarize=speakers is not None,
             speakers=speakers or 0,
+            timestamps=self._timestamps.get(),
         )
         try:
             self.runner.start(options)

@@ -44,9 +44,6 @@ LOG_FILE = ROOT / "transcripts.log"
 MODEL_DIR = ROOT / "models" / "large-v3"
 
 SEGMENT_SECONDS = 30 * 60
-# NeMo's whole-recording speaker pass can need several GiB beyond Whisper.
-# Use system RAM for long recordings rather than exhausting an 8 GiB GPU.
-CPU_DIARIZATION_SECONDS = 90 * 60
 AUDIO_SUFFIXES = (".m4a", ".mp3", ".wav", ".mp4", ".aac", ".flac", ".ogg",
                   ".opus", ".wma", ".mov", ".mkv", ".webm")
 HF_BASE = "https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main"
@@ -86,7 +83,9 @@ def _env_flag(name: str, default: bool = True) -> bool:
 # left unset, the clustering works it out on its own.
 DIARIZE = _env_flag("H9_DIARIZE", default=True)
 NUM_SPEAKERS = int(os.getenv("H9_SPEAKERS") or 0) or None
-TURN_TIMESTAMPS = _env_flag("H9_TIMESTAMPS", default=False)
+# Every speaker turn (or paragraph, without speaker labels) opens on its
+# position in the recording, `[mm:ss]` or `[h:mm:ss]`.
+TURN_TIMESTAMPS = _env_flag("H9_TIMESTAMPS", default=True)
 
 # The desktop window sets H9_PROGRESS so it can draw a live position inside the
 # recording. These lines go to stdout only - never to transcripts.log - and the
@@ -98,6 +97,13 @@ def emit_progress(fraction: float) -> None:
     percent = max(0.0, min(1.0, fraction)) * 100
     if EMIT_PROGRESS:
         print(f"@progress {percent:.1f}", flush=True)
+
+
+def _clock(milliseconds: int) -> str:
+    """`mm:ss`, or `h:mm:ss` past the hour: same as diarization.format_time."""
+    hours, rest = divmod(max(int(milliseconds) // 1000, 0), 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
 def _write_txt(path: Path, segments: list) -> None:
@@ -112,8 +118,12 @@ def _write_txt(path: Path, segments: list) -> None:
         text = segment.text.strip()
         if not text or _is_hallucination(text):
             continue
-        if previous_end is not None and (segment.start - previous_end) > PARAGRAPH_SPLIT_MS:
+        new_paragraph = previous_end is None or (
+            segment.start - previous_end) > PARAGRAPH_SPLIT_MS
+        if new_paragraph and previous_end is not None:
             parts.append("\n\n")
+        if new_paragraph and TURN_TIMESTAMPS:
+            parts.append(f"[{_clock(segment.start)}] ")
         parts.append(text + " ")
         previous_end = segment.end
     path.write_text("".join(parts), encoding="utf-8")
@@ -372,8 +382,7 @@ def should_skip(source: Path, output: Path) -> bool:
     return not DIARIZE or is_labelled(output)
 
 
-def label_speakers(source: Path, words: list[dict], output: Path,
-                   duration: float) -> None:
+def label_speakers(source: Path, words: list[dict], output: Path) -> None:
     """Rewrite the transcript with every turn tagged Person 1, 2, ...
 
     Replaces the plain transcript `transcribe_one` has already written. That
@@ -393,9 +402,9 @@ def label_speakers(source: Path, words: list[dict], output: Path,
     waveform = faster_whisper.decode_audio(
         str(source), sampling_rate=diarization.SAMPLE_RATE
     )
-    device = "cpu" if duration >= CPU_DIARIZATION_SECONDS else diarization.default_device()
-    if device == "cpu" and diarization.default_device() == "cuda":
-        log("  long recording: identifying speakers on CPU to avoid GPU memory exhaustion")
+    # diarization.py patches NeMo so a 3-hour recording peaks under 4 GiB of
+    # VRAM; the CPU retry below is only a safety net.
+    device = diarization.default_device()
     try:
         speaker_ts = diarization.diarize_waveform(
             waveform, num_speakers=NUM_SPEAKERS, device=device
@@ -492,7 +501,7 @@ def transcribe_one(source: Path, model) -> None:
     log(f"DONE  {source.name} -> {output.name}")
 
     if DIARIZE:
-        label_speakers(source, all_words, output, duration)
+        label_speakers(source, all_words, output)
 
 
 def main() -> int:
