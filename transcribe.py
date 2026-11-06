@@ -86,6 +86,9 @@ NUM_SPEAKERS = int(os.getenv("H9_SPEAKERS") or 0) or None
 # Every speaker turn (or paragraph, without speaker labels) opens on its
 # position in the recording, `[mm:ss]` or `[h:mm:ss]`.
 TURN_TIMESTAMPS = _env_flag("H9_TIMESTAMPS", default=True)
+# A silence this long (a break, dead air) gets its own line in the transcript,
+# "--- 8 min without speech ---". 0 switches the line off.
+SILENCE_NOTE_MS = int(float(os.getenv("H9_SILENCE_SECONDS", "60")) * 1000)
 
 # The desktop window sets H9_PROGRESS so it can draw a live position inside the
 # recording. These lines go to stdout only - never to transcripts.log - and the
@@ -106,6 +109,14 @@ def _clock(milliseconds: int) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
+def _silence_line(start_ms: int, gap_ms: int) -> str:
+    """Same wording as diarization.silence_note, which can't be imported here."""
+    minutes = gap_ms / 60000
+    span = f"{minutes:.0f} min" if minutes >= 1.5 else f"{gap_ms // 1000} s"
+    prefix = f"[{_clock(start_ms)}] " if TURN_TIMESTAMPS else ""
+    return f"{prefix}--- {span} without speech ---"
+
+
 def _write_txt(path: Path, segments: list) -> None:
     """Write segments to a .txt file, mirroring Buzz's TXT format.
 
@@ -118,10 +129,12 @@ def _write_txt(path: Path, segments: list) -> None:
         text = segment.text.strip()
         if not text or _is_hallucination(text):
             continue
-        new_paragraph = previous_end is None or (
-            segment.start - previous_end) > PARAGRAPH_SPLIT_MS
+        gap = 0 if previous_end is None else segment.start - previous_end
+        new_paragraph = previous_end is None or gap > PARAGRAPH_SPLIT_MS
         if new_paragraph and previous_end is not None:
             parts.append("\n\n")
+        if previous_end is not None and SILENCE_NOTE_MS and gap >= SILENCE_NOTE_MS:
+            parts.append(_silence_line(previous_end, gap) + "\n\n")
         if new_paragraph and TURN_TIMESTAMPS:
             parts.append(f"[{_clock(segment.start)}] ")
         parts.append(text + " ")
@@ -307,8 +320,25 @@ def _load_model(model_dir: Path):
     return model
 
 
+# H9_BATCH > 0 decodes that many 30-second chunks at once: ~3x faster on an
+# 8 GB GPU, but it drops some short cross-talk ("sorry, go on") and merges
+# lines into longer blocks. 0 keeps the one-chunk-at-a-time decoder.
+WHISPER_BATCH = int(os.getenv("H9_BATCH", "0"))
+_PIPELINE = None
+
+
+def _batched(model):
+    global _PIPELINE
+    if _PIPELINE is None or _PIPELINE.model is not model:
+        import faster_whisper
+
+        _PIPELINE = faster_whisper.BatchedInferencePipeline(model=model)
+    return _PIPELINE
+
+
 def transcribe_file(
-    audio_path: Path, model, want_words: bool = False, progress=None
+    audio_path: Path, model, want_words: bool = False, progress=None,
+    hotwords: str | None = None,
 ) -> tuple[list[Segment], list[dict]]:
     """Transcribe one audio file.
 
@@ -325,16 +355,26 @@ def transcribe_file(
     vad_filter = _env_flag("H9_VAD", default=True)
 
     log(f"  transcribing {audio_path.name}...")
-    whisper_segments, _info = model.transcribe(
-        str(audio_path),
+    common = dict(
         language="en",
         task="transcribe",
         beam_size=beam_size,
-        vad_filter=vad_filter,
-        condition_on_previous_text=False,
         no_speech_threshold=0.6,
         word_timestamps=want_words,
+        hotwords=hotwords,
     )
+    if WHISPER_BATCH > 0:
+        # Batched mode always cuts the audio at the voice detector's pauses.
+        whisper_segments, _info = _batched(model).transcribe(
+            str(audio_path), batch_size=WHISPER_BATCH, **common
+        )
+    else:
+        whisper_segments, _info = model.transcribe(
+            str(audio_path),
+            vad_filter=vad_filter,
+            condition_on_previous_text=False,
+            **common,
+        )
 
     segments: list[Segment] = []
     words: list[dict] = []
@@ -375,6 +415,9 @@ def should_skip(source: Path, output: Path) -> bool:
     if _env_flag("H9_FORCE", default=False):
         return False
     if not (output.exists() and output.stat().st_mtime >= source.stat().st_mtime):
+        return False
+    glossary = source.with_name(source.name + ".terms.txt")
+    if glossary.exists() and glossary.stat().st_mtime > output.stat().st_mtime:
         return False
     # A transcript written before labelling was switched on carries no tags,
     # and the word timings the labeller needs were never stored anywhere, so
@@ -435,7 +478,7 @@ def label_speakers(source: Path, words: list[dict], output: Path) -> None:
         log("  no enrolled voice yet; Person 1 is whoever speaks first")
 
     labels = diarization.person_labels(speaker_ts, me_cluster)
-    turns = diarization.build_turns(words, speaker_ts, labels)
+    turns = diarization.build_turns(words, speaker_ts, labels, gap_ms=SILENCE_NOTE_MS)
     diarization.write_turns(output, turns, with_timestamps=TURN_TIMESTAMPS)
     log(f"  {len(labels)} voice(s) over {len(turns)} turns -> {output.name}")
 
@@ -447,6 +490,13 @@ def transcribe_one(source: Path, model) -> None:
         return
 
     log(f"START {source.name}")
+    glossary = source.with_name(source.name + ".terms.txt")
+    hotwords = ", ".join(
+        term.strip() for line in glossary.read_text(encoding="utf-8-sig").splitlines()
+        for term in line.split(",") if term.strip()
+    ) if glossary.is_file() else None
+    if hotwords:
+        log(f"  using glossary ({len(hotwords.split(', '))} terms)")
     duration = probe_duration_seconds(source)
     log(f"  duration: {duration / 60:.1f} min")
 
@@ -464,6 +514,7 @@ def transcribe_one(source: Path, model) -> None:
             part_offset = offset_ms / 1000
             segments, words = transcribe_file(
                 part, model, want_words=DIARIZE,
+                hotwords=hotwords,
                 progress=lambda done, base=part_offset: emit_progress(
                     (base + done) / duration),
             )
@@ -492,6 +543,7 @@ def transcribe_one(source: Path, model) -> None:
     else:
         all_segments, all_words = transcribe_file(
             source, model, want_words=DIARIZE,
+            hotwords=hotwords,
             progress=lambda done: emit_progress(done / duration),
         )
 
@@ -539,13 +591,16 @@ def main() -> int:
         log(f"ERROR: {exc}")
         return 1
 
+    from keep_awake import keep_awake
+
     try:
-        for source in sources:
-            try:
-                transcribe_one(source, model)
-            except Exception as exc:
-                log(f"ERROR {source.name}: {exc}")
-                return 1
+        with keep_awake():
+            for source in sources:
+                try:
+                    transcribe_one(source, model)
+                except Exception as exc:
+                    log(f"ERROR {source.name}: {exc}")
+                    return 1
     finally:
         if DIARIZE:
             import diarization

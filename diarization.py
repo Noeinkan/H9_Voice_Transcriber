@@ -262,25 +262,25 @@ def person_labels(
 
 
 def build_turns(
-    words: list[dict], speaker_ts: list[tuple[int, int, int]], labels: dict[int, str]
+    words: list[dict], speaker_ts: list[tuple[int, int, int]], labels: dict[int, str],
+    gap_ms: int = 0,
 ) -> list[dict]:
     """Attach each transcribed word to a speaker, then merge into turns.
 
-    get_realigned_ws_mapping_with_punctuation fixes the common failure where
-    a speaker change lands in the middle of a sentence: it moves the whole
-    sentence to whichever speaker owns most of it. It works off the
-    punctuation Whisper already produced.
+    Keep word-level speaker changes, including short replies inside a sentence.
+    Sentence-level realignment used to move those replies to the other speaker.
+
+    When `gap_ms` is set, a silence at least that long between two words
+    always opens a new turn, and that turn records the silence in "gap_ms".
+    Word times are used rather than Whisper's sentence blocks because one
+    block can stretch over a whole coffee break.
     """
     if not words or not speaker_ts:
         return []
 
-    from whisper_diarization.helpers import (
-        get_realigned_ws_mapping_with_punctuation,
-        get_words_speaker_mapping,
-    )
+    from whisper_diarization.helpers import get_words_speaker_mapping
 
     mapping = get_words_speaker_mapping(words, speaker_ts, "start")
-    mapping = get_realigned_ws_mapping_with_punctuation(mapping)
 
     turns: list[dict] = []
     for item in mapping:
@@ -288,7 +288,9 @@ def build_turns(
         if not word:
             continue
         label = labels.get(item["speaker"], f"Person {item['speaker'] + 1}")
-        if turns and turns[-1]["speaker"] == label:
+        silence = item["start_time"] - turns[-1]["end_ms"] if turns else 0
+        is_break = gap_ms > 0 and silence >= gap_ms
+        if turns and turns[-1]["speaker"] == label and not is_break:
             turns[-1]["text"] += " " + word
             turns[-1]["end_ms"] = item["end_time"]
         else:
@@ -298,9 +300,18 @@ def build_turns(
                     "start_ms": item["start_time"],
                     "end_ms": item["end_time"],
                     "text": word,
+                    "gap_ms": silence if is_break else 0,
                 }
             )
     return turns
+
+
+def silence_note(gap_start_ms: int, gap_ms: int, with_timestamps: bool) -> str:
+    """The line marking a long stretch without speech, e.g. a break."""
+    minutes = gap_ms / 60000
+    span = f"{minutes:.0f} min" if minutes >= 1.5 else f"{gap_ms // 1000} s"
+    prefix = f"[{format_time(gap_start_ms)}] " if with_timestamps else ""
+    return f"{prefix}--- {span} without speech ---"
 
 
 def format_time(milliseconds: int) -> str:
@@ -315,6 +326,9 @@ def format_time(milliseconds: int) -> str:
 def write_turns(path: Path, turns: list[dict], with_timestamps: bool = False) -> None:
     blocks = []
     for turn in turns:
+        if turn.get("gap_ms"):
+            blocks.append(silence_note(turn["start_ms"] - turn["gap_ms"],
+                                       turn["gap_ms"], with_timestamps))
         prefix = f"[{format_time(turn['start_ms'])}] " if with_timestamps else ""
         blocks.append(f"{prefix}{turn['speaker']}: {turn['text']}")
     path.write_text("\n\n".join(blocks) + ("\n" if blocks else ""), encoding="utf-8")

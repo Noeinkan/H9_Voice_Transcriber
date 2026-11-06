@@ -21,9 +21,10 @@ Nothing leaves your machine — the model runs locally.
 | Control | What it does |
 |---|---|
 | **Add audio…** | Copies the files you pick into `input`. Accepts m4a, mp3, wav, flac, ogg, opus, aac, wma and the common video containers. |
-| **Quality** | `Fast` / `Balanced` / `Best` — Whisper's beam size (1 / 5 / 10). Higher is slower and slightly more accurate. |
+| **Quality** | `Balanced` (default) and `Best` decode one chunk at a time with beam size 5 / 10. `Fast` decodes 8 chunks at once: about 3x quicker, but it misses some short cross-talk and merges lines into longer blocks. |
 | **Precision** | `Low VRAM (int8)` is the safe default on a 4 GB card. `Sharper (float16)` is better when you have VRAM to spare. |
 | **Speakers** | `Auto` by default: the transcript comes out split into turns tagged `Person 1` / `Person 2`, and the clustering counts the voices itself. Pick `2 people` for an interview when you already know the count — it is more reliable than guessing. `Off` gives one unbroken block of text and skips the extra pass over the audio. See [Telling the voices apart](#telling-the-voices-apart) — including how to make yourself Person 1. |
+| **Glossary...** | Select one audio file and enter uncommon names or technical terms, one per line or comma-separated. Avoid everyday words and repeated terms such as `Lot 1` and `Lot 2`: too many hints can make Whisper repeat or invent words. Saving a glossary marks that recording for transcription again. |
 | **Redo files already transcribed** | Off by default: files whose `.txt` is newer than the audio are skipped. Tick it to transcribe them again. |
 | **Start** | Names the work before you press it — `Transcribe 3 files (1 h 46 min)` — and reads `Nothing new to transcribe` when every file is up to date. During a run the status line adds an estimate (`about 12 min left`) once the pace is known. |
 | **Show up to date** | Up-to-date files are hidden by default so the file being worked on stays in view; this brings them back. Files added during a run show as `Next run`. |
@@ -165,11 +166,14 @@ Environment variables read by `transcribe.py`, all set for you by the window:
 | Variable | Default | Meaning |
 |---|---|---|
 | `H9_BEAM_SIZE` | `5` | Whisper beam size |
+| `H9_BATCH` | `0` | Chunks Whisper decodes at once; `8` is the window's Fast preset. `0` = one at a time, the most complete |
 | `H9_COMPUTE_TYPE` | `int8` | `int8` or `float16` |
 | `H9_VAD` | on | Voice-activity filtering |
 | `H9_FORCE` | off | Re-transcribe files that already have an up-to-date `.txt` |
 | `H9_DIARIZE` | **on** | Split `<name>.txt` into Person 1 / Person 2 turns. Set to `0` (`run.bat --no-speakers`) for one unbroken block of text |
 | `H9_SPEAKERS` | auto | How many people are in the recording, when you know it |
+| `<audio name>.terms.txt` | absent | Optional per-recording glossary beside the audio in `input/`; the window's **Glossary...** button edits it |
+| `H9_SILENCE_SECONDS` | `60` | A silence at least this long gets its own line, `--- 8 min without speech ---`; `0` = never |
 | `H9_TIMESTAMPS` | on | Prefix every speaker turn (or paragraph, without speaker labels) with `[mm:ss]` |
 | `H9_PROGRESS` | off | Print `@progress <percent>` lines on stdout for the window's playhead. They never reach `transcripts.log`, and `run.bat` leaves this unset so its console output is unchanged. |
 

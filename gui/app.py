@@ -19,7 +19,9 @@ from .filelist import FileList
 from .runner import Event, Options, Runner
 from .visualizer import Visualizer
 
-QUALITY_PRESETS = {"Fast": 1, "Balanced": 5, "Best": 10}
+# (beam size, Whisper batch). Fast batches 8 chunks at once: ~3x quicker than
+# Balanced, and no less complete than beam 1 alone, which saved only 10%.
+QUALITY_PRESETS = {"Fast": (1, 8), "Balanced": (5, 0), "Best": (10, 0)}
 PRECISIONS = {"Low VRAM (int8)": "int8", "Sharper (float16)": "float16"}
 # Speaker labelling: how many voices to expect. 0 means let the clustering
 # work it out; pinning the real number keeps it from splitting one voice in
@@ -160,6 +162,8 @@ class App(tk.Tk):
             buttons, "Show up to date", lambda: self.files.toggle_up_to_date())
         self.up_to_date_toggle.pack(side="left", padx=(0, 6))
         self._small_button(buttons, "Add audio...", self._add_files).pack(side="left", padx=(0, 6))
+        self.glossary_button = self._small_button(buttons, "Glossary...", self._edit_glossary)
+        self.glossary_button.pack(side="left", padx=(0, 6))
         self._small_button(buttons, "Refresh", self.files_refresh).pack(side="left", padx=(0, 6))
         self._small_button(buttons, "Open input folder",
                            lambda: _open(paths.INPUT_DIR)).pack(side="left")
@@ -296,6 +300,7 @@ class App(tk.Tk):
                             activeforeground="#0f1117", borderwidth=0,
                             font=(theme.FONT, 9))
         self.menu.add_command(label="Open transcript", command=self._open_selected_transcript)
+        self.menu.add_command(label="Edit glossary", command=self._edit_glossary)
         self.menu.add_command(label="Show audio in Explorer", command=self._reveal_selected)
         self.menu.add_separator()
         self.menu.add_command(label="Remove from input folder", command=self._remove_selected)
@@ -410,7 +415,8 @@ class App(tk.Tk):
 
         speakers = SPEAKER_MODES.get(self._speakers.get())
         options = Options(
-            beam_size=QUALITY_PRESETS[self._quality.get()],
+            beam_size=QUALITY_PRESETS[self._quality.get()][0],
+            whisper_batch=QUALITY_PRESETS[self._quality.get()][1],
             compute_type=PRECISIONS[self._precision.get()],
             vad=True,
             force=force,
@@ -445,6 +451,7 @@ class App(tk.Tk):
 
     def _set_running(self, running: bool) -> None:
         self.stop_button.configure(state="normal" if running else "disabled")
+        self.glossary_button.configure(state="disabled" if running else "normal")
         for widget in self._option_widgets:
             widget.configure(state="disabled" if running else "readonly")
         if running:
@@ -697,6 +704,41 @@ class App(tk.Tk):
             else:
                 self._set_stage("No transcript yet for " + source.name)
 
+    def _edit_glossary(self) -> None:
+        if self.runner.is_running():
+            return
+        selected = self.files.selected_paths()
+        if len(selected) != 1:
+            messagebox.showinfo("Glossary", "Select one audio file first.", parent=self)
+            return
+        source = selected[0]
+        glossary = paths.glossary_for(source)
+        dialog = tk.Toplevel(self)
+        dialog.title("Glossary - " + source.name)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(True, True)
+        dialog.geometry("540x350")
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Names and technical terms, one per line or comma-separated.").pack(anchor="w")
+        editor = tk.Text(frame, height=12, wrap="word")
+        editor.pack(fill="both", expand=True, pady=(10, 12))
+        if glossary.is_file():
+            editor.insert("1.0", glossary.read_text(encoding="utf-8-sig"))
+
+        def save() -> None:
+            try:
+                glossary.write_text(editor.get("1.0", "end").strip() + "\n", encoding="utf-8")
+            except OSError as exc:
+                messagebox.showerror("Could not save glossary", str(exc), parent=dialog)
+                return
+            dialog.destroy()
+            self.files.set_diarize(SPEAKER_MODES.get(self._speakers.get()) is not None)
+
+        ttk.Button(frame, text="Save glossary", command=save).pack(anchor="e")
+        editor.focus_set()
+
     def _reveal_selected(self) -> None:
         for source in self.files.selected_paths():
             if os.name == "nt":
@@ -717,6 +759,7 @@ class App(tk.Tk):
         for path in selected:
             try:
                 path.unlink()
+                paths.glossary_for(path).unlink(missing_ok=True)
             except OSError as exc:
                 messagebox.showerror("Could not delete", path.name + ": " + str(exc),
                                      parent=self)

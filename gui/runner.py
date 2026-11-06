@@ -36,17 +36,20 @@ class Options:
     """Everything the window lets the user change before pressing Start."""
 
     beam_size: int = 5
+    whisper_batch: int = 0         # 0 = one chunk at a time (most complete)
     compute_type: str = "int8"
     vad: bool = True
     force: bool = False
     diarize: bool = False
     speakers: int = 0              # 0 = let the clustering decide
     timestamps: bool = True        # [mm:ss] at the start of every turn
+    silence_seconds: int = 60      # mark silences this long; 0 = never
 
     def env(self) -> dict[str, str]:
         environment = dict(os.environ)
         environment.update(
             H9_BEAM_SIZE=str(self.beam_size),
+            H9_BATCH=str(self.whisper_batch),
             H9_COMPUTE_TYPE=self.compute_type,
             H9_VAD="1" if self.vad else "0",
             H9_FORCE="1" if self.force else "0",
@@ -55,6 +58,7 @@ class Options:
             H9_DIARIZE="1" if self.diarize else "0",
             H9_SPEAKERS=str(self.speakers if self.diarize else 0),
             H9_TIMESTAMPS="1" if self.timestamps else "0",
+            H9_SILENCE_SECONDS=str(self.silence_seconds),
             H9_PROGRESS="1",
             PYTHONUNBUFFERED="1",
             PYTHONIOENCODING="utf-8",

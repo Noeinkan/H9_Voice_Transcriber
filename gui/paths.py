@@ -73,6 +73,10 @@ def transcript_for(source: Path) -> Path:
     return OUTPUT_DIR / f"{source.stem}.txt"
 
 
+def glossary_for(source: Path) -> Path:
+    return source.with_name(source.name + ".terms.txt")
+
+
 # Mirrors transcribe.py's _LABELLED_FIRST_LINE: change one, change the other,
 # or the window promises to skip files the transcriber then redoes.
 _LABELLED_FIRST_LINE = re.compile(r"^(?:\[\d+:\d{2}(?::\d{2})?\] )?Person \d+: ")
@@ -83,6 +87,9 @@ def is_up_to_date(source: Path, diarize: bool) -> bool:
     transcript = transcript_for(source)
     try:
         if transcript.stat().st_mtime < source.stat().st_mtime:
+            return False
+        glossary = glossary_for(source)
+        if glossary.exists() and glossary.stat().st_mtime > transcript.stat().st_mtime:
             return False
         if not diarize:
             return True
