@@ -9,7 +9,7 @@ Offline transcription of long recordings into plain text files, powered by OpenA
 1. Open the project folder `H9_Voice_Transcriber` in Explorer and double-click **`Create Desktop Shortcut.bat`**. A console opens, prints `Shortcut created: ...`, and waits for a key press. Close it.
 2. On your desktop you now have **H9 Voice Transcriber** with a purple microphone icon. Double-click it. The window opens in about a second.
    *If nothing appears the first time:* the shortcut is building the Python environment, which takes 10 minutes or more and shows a console while it works. Leave it alone until the window appears.
-3. In the window, click **Add audio…** and pick your recordings, or drop files straight into the `input` folder and click **Refresh**. The queue lists each file with its size, length and status.
+3. In the window, click **Add audio…** and pick your recordings, or drop files straight into the `input` folder and click **Refresh**. The queue lists each file with its size, length, modified date and status. Click a column header to sort; click it again to reverse the order.
 4. Click **Start transcription**. The bar under the buttons fills as files complete, and the line beside it says what is happening right now (`Loading the Whisper model…`, `Transcribing <file>`, `Segment 2 of 4`).
    *The very first run downloads the model, about 3 GB.* The status line shows the download in GB; it happens once.
 5. When the run finishes, double-click any row marked **Done** to open its transcript, or click **Open output folder** at the bottom right.

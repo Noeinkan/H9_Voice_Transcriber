@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+from datetime import datetime
 from pathlib import Path
 from tkinter import ttk
 
@@ -28,6 +29,8 @@ STATUS_COLOUR = {
 }
 _EMPTY_ROW = "__empty__"
 _HIDDEN_ROW = "__hidden__"
+_HEADINGS = {"name": "FILE", "size": "SIZE", "length": "LENGTH",
+             "date": "DATE MODIFIED", "status": "STATUS"}
 
 
 class FileList(ttk.Frame):
@@ -46,22 +49,25 @@ class FileList(ttk.Frame):
         # once, so anything added after that waits for the next run.
         self._run_names: set[str] | None = None
         self.show_up_to_date = False
+        self._sort_column: str | None = None
+        self._sort_reverse = False
 
         self.tree = ttk.Treeview(
             self,
             style="Files.Treeview",
-            columns=("name", "size", "length", "status"),
+            columns=("name", "size", "length", "date", "status"),
             show="headings",
             selectmode="extended",
             height=7,
         )
-        self.tree.heading("name", text="FILE", anchor="w")
-        self.tree.heading("size", text="SIZE", anchor="e")
-        self.tree.heading("length", text="LENGTH", anchor="e")
-        self.tree.heading("status", text="STATUS", anchor="w")
+        for column, label in _HEADINGS.items():
+            self.tree.heading(column, text=label,
+                              anchor="e" if column in ("size", "length") else "w",
+                              command=lambda column=column: self._sort_by(column))
         self.tree.column("name", anchor="w", width=300, stretch=True)
         self.tree.column("size", anchor="e", width=80, stretch=False)
         self.tree.column("length", anchor="e", width=80, stretch=False)
+        self.tree.column("date", anchor="w", width=145, stretch=False)
         self.tree.column("status", anchor="w", width=150, stretch=False)
 
         for status, colour in STATUS_COLOUR.items():
@@ -117,24 +123,52 @@ class FileList(ttk.Frame):
         if not self._paths:
             self.tree.insert("", "end", iid=_EMPTY_ROW, tags=(_EMPTY_ROW,),
                              values=("No audio yet - use Add audio... or drop files into the input folder",
-                                     "", "", ""))
+                                     "", "", "", ""))
             return
         # Up-to-date files sink to the bottom (or out of sight): on a folder
         # that has been in use a while they are most of the list, and they
         # pushed the file actually being worked on off screen.
         active = [n for n in self._paths if self._status.get(n) != "skipped"]
         resting = [n for n in self._paths if self._status.get(n) == "skipped"]
-        for name in active + (resting if self.show_up_to_date else []):
-            self._insert(name)
+        names = active + (resting if self.show_up_to_date else [])
+        metadata = {name: _file_metadata(self._paths[name]) for name in names}
+        if self._sort_column:
+            # Unknown size, length or date stays last in either direction.
+            present = [name for name in names if self._sort_value(name, metadata) is not None]
+            missing = [name for name in names if name not in present]
+            names = sorted(present, key=lambda name: self._sort_value(name, metadata),
+                           reverse=self._sort_reverse) + missing
+        for name in names:
+            self._insert(name, metadata[name])
         if resting and not self.show_up_to_date:
             self.tree.insert("", "end", iid=_HIDDEN_ROW, tags=(_HIDDEN_ROW,), values=(
                 f"+ {len(resting)} up-to-date file(s) hidden - double-click to show",
-                "", "", ""))
+                "", "", "", ""))
         for iid in selection:
             if self.tree.exists(iid):
                 self.tree.selection_add(iid)
 
-    def _insert(self, name: str) -> None:
+    def _sort_by(self, column: str) -> None:
+        self._sort_reverse = not self._sort_reverse if self._sort_column == column else False
+        self._sort_column = column
+        for key, label in _HEADINGS.items():
+            arrow = " ▼" if self._sort_reverse else " ▲"
+            self.tree.heading(key, text=label + (arrow if key == column else ""))
+        self._redraw()
+
+    def _sort_value(self, name: str, metadata: dict[str, tuple[int | None, float | None]]):
+        column = self._sort_column
+        if column == "name":
+            return name.casefold()
+        if column == "size":
+            return metadata[name][0]
+        if column == "length":
+            return self._seconds.get(name)
+        if column == "date":
+            return metadata[name][1]
+        return STATUS_LABEL.get(self._status.get(name, "queued"), "").casefold()
+
+    def _insert(self, name: str, metadata: tuple[int | None, float | None]) -> None:
         status = self._status.get(name, "queued")
         label = STATUS_LABEL.get(status, status)
         detail = self._detail.get(name, "")
@@ -142,8 +176,9 @@ class FileList(ttk.Frame):
             label = f"{label} — {detail}" if status == "error" else detail.capitalize()
         self.tree.insert("", "end", iid=name, tags=(status,), values=(
             name,
-            _human_size(self._paths[name]),
+            _human_size(metadata[0]),
             format_duration(self._seconds.get(name)),
+            _format_date(metadata[1]),
             label,
         ))
 
@@ -257,14 +292,30 @@ def format_duration(seconds: float | None) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def _human_size(path: Path) -> str:
+def _file_metadata(path: Path) -> tuple[int | None, float | None]:
     try:
-        megabytes = path.stat().st_size / (1024 * 1024)
+        stat = path.stat()
+        return stat.st_size, stat.st_mtime
     except OSError:
+        return None, None
+
+
+def _human_size(size: int | None) -> str:
+    if size is None:
         return "—"
+    megabytes = size / (1024 * 1024)
     if megabytes >= 1024:
         return f"{megabytes / 1024:.1f} GB"
     return f"{megabytes:.0f} MB"
+
+
+def _format_date(timestamp: float | None) -> str:
+    if timestamp is None:
+        return "—"
+    try:
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return "—"
 
 
 def _probe(path: Path) -> float | None:
