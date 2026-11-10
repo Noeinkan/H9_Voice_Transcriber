@@ -9,7 +9,7 @@ Offline transcription of long recordings into plain text files, powered by OpenA
 1. Open the project folder `H9_Voice_Transcriber` in Explorer and double-click **`Create Desktop Shortcut.bat`**. A console opens, prints `Shortcut created: ...`, and waits for a key press. Close it.
 2. On your desktop you now have **H9 Voice Transcriber** with a purple microphone icon. Double-click it. The window opens in about a second.
    *If nothing appears the first time:* the shortcut is building the Python environment, which takes 10 minutes or more and shows a console while it works. Leave it alone until the window appears.
-3. In the window, click **Add audio…** and pick your recordings, or drop files straight into the `input` folder and click **Refresh**. The queue lists each file with its size, length, modified date and status. Click a column header to sort; click it again to reverse the order.
+3. In the window, click **Add audio…** and pick your recordings, or drop files straight into the `input` folder and click **Refresh**. The queue shows every file, newest modified first, with its size, length, modified date and status. Click a column header to sort; click it again to reverse the order.
 4. Click **Start transcription**. The bar under the buttons fills as files complete, and the line beside it says what is happening right now (`Loading the Whisper model…`, `Transcribing <file>`, `Segment 2 of 4`).
    *The very first run downloads the model, about 3 GB.* The status line shows the download in GB; it happens once.
 5. When the run finishes, double-click any row marked **Done** to open its transcript, or click **Open output folder** at the bottom right.
@@ -27,7 +27,6 @@ Nothing leaves your machine — the model runs locally.
 | **Glossary...** | Select one audio file and enter uncommon names or technical terms, one per line or comma-separated. Avoid everyday words and repeated terms such as `Lot 1` and `Lot 2`: too many hints can make Whisper repeat or invent words. Saving a glossary marks that recording for transcription again. |
 | **Redo files already transcribed** | Off by default: files whose `.txt` is newer than the audio are skipped. Tick it to transcribe them again. |
 | **Start** | Names the work before you press it — `Transcribe 3 files (1 h 46 min)` — and reads `Nothing new to transcribe` when every file is up to date. During a run the status line adds an estimate (`about 12 min left`) once the pace is known. |
-| **Show up to date** | Up-to-date files are hidden by default so the file being worked on stays in view; this brings them back. Files added during a run show as `Next run`. |
 | **Stop** | Kills the transcription and the ffmpeg processes under it. Files already finished keep their transcripts. |
 | **Show details** | Opens the live log — the same lines that go into `transcripts.log`. It opens by itself if a run fails. |
 | Right-click a row | Open transcript · Show audio in Explorer · Remove from input folder. |

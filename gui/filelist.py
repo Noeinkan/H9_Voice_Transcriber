@@ -28,7 +28,6 @@ STATUS_COLOUR = {
     "later": theme.FAINT,
 }
 _EMPTY_ROW = "__empty__"
-_HIDDEN_ROW = "__hidden__"
 _HEADINGS = {"name": "FILE", "size": "SIZE", "length": "LENGTH",
              "date": "DATE MODIFIED", "status": "STATUS"}
 
@@ -48,9 +47,8 @@ class FileList(ttk.Frame):
         # The names transcribe.py listed when the run began. It reads input/
         # once, so anything added after that waits for the next run.
         self._run_names: set[str] | None = None
-        self.show_up_to_date = False
-        self._sort_column: str | None = None
-        self._sort_reverse = False
+        self._sort_column = "date"
+        self._sort_reverse = True
 
         self.tree = ttk.Treeview(
             self,
@@ -61,7 +59,7 @@ class FileList(ttk.Frame):
             height=7,
         )
         for column, label in _HEADINGS.items():
-            self.tree.heading(column, text=label,
+            self.tree.heading(column, text=label + (" ▼" if column == "date" else ""),
                               anchor="e" if column in ("size", "length") else "w",
                               command=lambda column=column: self._sort_by(column))
         self.tree.column("name", anchor="w", width=300, stretch=True)
@@ -73,8 +71,6 @@ class FileList(ttk.Frame):
         for status, colour in STATUS_COLOUR.items():
             self.tree.tag_configure(status, foreground=colour)
         self.tree.tag_configure(_EMPTY_ROW, foreground=theme.FAINT)
-        self.tree.tag_configure(_HIDDEN_ROW, foreground=theme.FAINT)
-        self.tree.bind("<Double-1>", self._on_hidden_row, add="+")
 
         scroll = ttk.Scrollbar(self, orient="vertical", style="Vert.Vertical.TScrollbar",
                                command=self.tree.yview)
@@ -125,12 +121,7 @@ class FileList(ttk.Frame):
                              values=("No audio yet - use Add audio... or drop files into the input folder",
                                      "", "", "", ""))
             return
-        # Up-to-date files sink to the bottom (or out of sight): on a folder
-        # that has been in use a while they are most of the list, and they
-        # pushed the file actually being worked on off screen.
-        active = [n for n in self._paths if self._status.get(n) != "skipped"]
-        resting = [n for n in self._paths if self._status.get(n) == "skipped"]
-        names = active + (resting if self.show_up_to_date else [])
+        names = list(self._paths)
         metadata = {name: _file_metadata(self._paths[name]) for name in names}
         if self._sort_column:
             # Unknown size, length or date stays last in either direction.
@@ -140,10 +131,6 @@ class FileList(ttk.Frame):
                            reverse=self._sort_reverse) + missing
         for name in names:
             self._insert(name, metadata[name])
-        if resting and not self.show_up_to_date:
-            self.tree.insert("", "end", iid=_HIDDEN_ROW, tags=(_HIDDEN_ROW,), values=(
-                f"+ {len(resting)} up-to-date file(s) hidden - double-click to show",
-                "", "", "", ""))
         for iid in selection:
             if self.tree.exists(iid):
                 self.tree.selection_add(iid)
@@ -181,15 +168,6 @@ class FileList(ttk.Frame):
             _format_date(metadata[1]),
             label,
         ))
-
-    def _on_hidden_row(self, event) -> None:
-        if self.tree.identify_row(event.y) == _HIDDEN_ROW:
-            self.toggle_up_to_date()
-
-    def toggle_up_to_date(self) -> None:
-        self.show_up_to_date = not self.show_up_to_date
-        self._redraw()
-        self._changed()
 
     def set_status(self, name: str, status: str, detail: str = "") -> None:
         if name not in self._paths:

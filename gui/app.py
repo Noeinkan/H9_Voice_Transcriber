@@ -158,9 +158,6 @@ class App(tk.Tk):
 
         buttons = ttk.Frame(bar, style="App.TFrame")
         buttons.grid(row=0, column=1, sticky="e")
-        self.up_to_date_toggle = self._small_button(
-            buttons, "Show up to date", lambda: self.files.toggle_up_to_date())
-        self.up_to_date_toggle.pack(side="left", padx=(0, 6))
         self._small_button(buttons, "Add audio...", self._add_files).pack(side="left", padx=(0, 6))
         self.glossary_button = self._small_button(buttons, "Glossary...", self._edit_glossary)
         self.glossary_button.pack(side="left", padx=(0, 6))
@@ -630,14 +627,6 @@ class App(tk.Tk):
 
     def _on_files_changed(self) -> None:
         counts = self.files.counts()
-        resting = counts["skipped"]
-        if not resting:
-            self.up_to_date_toggle.configure(text="Show up to date", state="disabled")
-        elif self.files.show_up_to_date:
-            self.up_to_date_toggle.configure(text="Hide up to date", state="normal")
-        else:
-            self.up_to_date_toggle.configure(text=f"Show up to date ({resting})",
-                                             state="normal")
         self._update_start_button()
 
         if counts["total"] == 0:
