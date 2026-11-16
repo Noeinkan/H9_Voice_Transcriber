@@ -35,8 +35,9 @@ numbers only mean something inside one pass, so labelling per part gives
 shifted onto the full recording's clock first (`transcribe_one`).
 
 **The labelled transcript overwrites the plain one**, so `<name>.txt` is the
-only transcript (beside it sits at most the `<name>.meetings.json` sidecar). `should_skip` tells the two apart by matching `Person N: ` against
-the file's **first line** (`is_labelled`). Change how `write_turns` opens a
+only transcript (beside it sits at most the `<name>.meetings.json` sidecar). `should_skip` tells the two apart by matching `[mm:ss] Person N` (alone on
+the line; the older inline `Person N: text` still matches) against the file's
+**first line** (`is_labelled`). Change how `write_turns` opens a
 turn and nothing raises: every recording just looks unlabelled forever and is
 re-transcribed on every run.
 
@@ -59,7 +60,7 @@ stale one never outlives its transcript.
 **The silence line and turn layout are written out three times**:
 `transcribe.py` (plain transcript), `diarization.silence_note` /
 `write_turns` (labelled), and `meeting_split.render` (split files). Change the
-`--- N min without speech ---` wording or the `[mm:ss] Person N: ` prefix in
+`--- N min without speech ---` wording or the `[mm:ss] Person N` header line in
 one and the others keep the old look; if the labelled-turn prefix changes,
 `_LABELLED_FIRST_LINE` above must follow.
 

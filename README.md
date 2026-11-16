@@ -94,18 +94,24 @@ Pin the number whenever you know it — set **Speakers** to `2 people`, or pass 
 to guess, the clustering sometimes splits one voice into two when the line is noisy or someone
 changes tone.
 
-There is one file per recording, `output\<name>.txt`, and it comes out split into turns:
+There is one file per recording, `output\<name>.txt`, and it comes out split into turns, laid out
+like a Microsoft Teams transcript:
 
 ```text
-Person 1: So, tell me how the handover went.
+[00:04] Person 1
+So, tell me how the handover went.
 
-Person 2: We closed it two weeks late, but the model was clean by then.
+[00:09] Person 2
+We closed it two weeks late, but the model was clean by then.
 ```
+
+When one person talks for a long time, their speech is still cut into entries of roughly 30–60
+seconds, at the end of a sentence or a short pause, so no paragraph runs for pages.
 
 With `--no-speakers` that same file is one unbroken block of text instead.
 
 First run is slower: it downloads about 200 MB of models, and on a four-minute clip labelling took
-roughly a minute on top of transcription. A recording whose `.txt` has no `Person 1:` on its first
+roughly a minute on top of transcription. A recording whose `.txt` has no `Person N` tag on its first
 line is transcribed again — the word-level timings the labeller needs were never saved to disk, so
 they cannot be recovered from the text.
 
@@ -211,4 +217,4 @@ run.bat         unattended batch run
 | Slow first run | Model download plus the first GPU compile are one-time costs |
 | One person split across `Person 1` and `Person 3` | Re-run with the count pinned: `run.bat --speakers 2` |
 | `Person 1` is the other person, not you | Enroll your voice (`enroll_voice.bat`). If you already did, check `transcripts.log`: it prints the match score per voice, and anything under 0.35 means the sample and the recording sound too different — re-record the sample on the device you actually use for interviews |
-| The transcript has no `Person 1:` tags | Either **Speakers** was set to `Off` (`--no-speakers`), or the diarizer found no speech — `transcripts.log` says which |
+| The transcript has no `Person 1` tags | Either **Speakers** was set to `Off` (`--no-speakers`), or the diarizer found no speech — `transcripts.log` says which |

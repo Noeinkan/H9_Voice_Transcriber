@@ -137,7 +137,8 @@ def _write_txt(path: Path, segments: list) -> None:
         if previous_end is not None and SILENCE_NOTE_MS and gap >= SILENCE_NOTE_MS:
             parts.append(_silence_line(previous_end, gap) + "\n\n")
         if new_paragraph and TURN_TIMESTAMPS:
-            parts.append(f"[{_clock(segment.start)}] ")
+            # Time on its own line, like the labelled transcript's header.
+            parts.append(f"[{_clock(segment.start)}]\n")
         parts.append(text + " ")
         previous_end = segment.end
     path.write_text("".join(parts), encoding="utf-8")
@@ -400,7 +401,9 @@ def transcribe_file(
 
 # A labelled transcript opens on its first turn's tag, so one line tells it
 # apart from a plain one. `[mm:ss] ` / `[h:mm:ss] ` when H9_TIMESTAMPS is on.
-_LABELLED_FIRST_LINE = re.compile(r"^(?:\[\d+:\d{2}(?::\d{2})?\] )?Person \d+: ")
+# Matches the current header line (`Person 1` alone) and the older inline
+# `Person 1: text`, so transcripts written before the layout change still skip.
+_LABELLED_FIRST_LINE = re.compile(r"^(?:\[\d+:\d{2}(?::\d{2})?\] )?Person \d+(?:: |\s*$)")
 
 
 def is_labelled(output: Path) -> bool:

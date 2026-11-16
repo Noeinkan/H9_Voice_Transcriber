@@ -261,6 +261,19 @@ def person_labels(
     return {speaker: f"Person {i}" for i, speaker in enumerate(order, start=1)}
 
 
+# A turn longer than this starts over at the next sentence end or short
+# pause, the way Teams cuts one person's monologue into separate entries.
+# Past the hard limit it starts over at the next word, punctuation or not:
+# Whisper sometimes drops punctuation for minutes at a time.
+TURN_SOFT_MAX_MS = 30_000
+TURN_HARD_MAX_MS = 60_000
+_PAUSE_MS = 700
+
+
+def _ends_sentence(text: str) -> bool:
+    return text.rstrip('"\')').endswith((".", "?", "!"))
+
+
 def build_turns(
     words: list[dict], speaker_ts: list[tuple[int, int, int]], labels: dict[int, str],
     gap_ms: int = 0, break_gap_ms: int = 0,
@@ -291,6 +304,10 @@ def build_turns(
         silence = item["start_time"] - turns[-1]["end_ms"] if turns else 0
         is_break = (gap_ms > 0 and silence >= gap_ms) or (
             break_gap_ms > 0 and silence >= break_gap_ms)
+        if turns and not is_break:
+            length = turns[-1]["end_ms"] - turns[-1]["start_ms"]
+            is_break = length >= TURN_HARD_MAX_MS or (length >= TURN_SOFT_MAX_MS and (
+                _ends_sentence(turns[-1]["text"]) or silence >= _PAUSE_MS))
         if turns and turns[-1]["speaker"] == label and not is_break:
             turns[-1]["text"] += " " + word
             turns[-1]["end_ms"] = item["end_time"]
@@ -330,6 +347,7 @@ def write_turns(path: Path, turns: list[dict], with_timestamps: bool = False) ->
         if turn.get("gap_ms"):
             blocks.append(silence_note(turn["start_ms"] - turn["gap_ms"],
                                        turn["gap_ms"], with_timestamps))
+        # Teams layout: time and speaker on one line, what they said below.
         prefix = f"[{format_time(turn['start_ms'])}] " if with_timestamps else ""
-        blocks.append(f"{prefix}{turn['speaker']}: {turn['text']}")
+        blocks.append(f"{prefix}{turn['speaker']}\n{turn['text']}")
     path.write_text("\n\n".join(blocks) + ("\n" if blocks else ""), encoding="utf-8")

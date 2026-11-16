@@ -79,7 +79,7 @@ def glossary_for(source: Path) -> Path:
 
 # Mirrors transcribe.py's _LABELLED_FIRST_LINE: change one, change the other,
 # or the window promises to skip files the transcriber then redoes.
-_LABELLED_FIRST_LINE = re.compile(r"^(?:\[\d+:\d{2}(?::\d{2})?\] )?Person \d+: ")
+_LABELLED_FIRST_LINE = re.compile(r"^(?:\[\d+:\d{2}(?::\d{2})?\] )?Person \d+(?:: |\s*$)")
 
 
 def is_up_to_date(source: Path, diarize: bool) -> bool:

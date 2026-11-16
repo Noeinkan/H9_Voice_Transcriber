@@ -86,8 +86,10 @@ def render(units: list[dict], timestamps: bool, silence_note_ms: int) -> str:
             span = f"{gap / 60_000:.0f} min" if gap >= 90_000 else f"{gap // 1000} s"
             prefix = f"[{clock(previous['end_ms'])}] " if timestamps else ""
             blocks.append(f"{prefix}--- {span} without speech ---")
-        prefix = f"[{clock(unit['start_ms'])}] " if timestamps else ""
-        speaker = f"{unit['speaker']}: " if unit.get("speaker") else ""
-        blocks.append(f"{prefix}{speaker}{unit['text'].strip()}")
+        # Same layout as diarization.write_turns: header line, then the text.
+        header = f"[{clock(unit['start_ms'])}] " if timestamps else ""
+        header += unit.get("speaker") or ""
+        text = unit["text"].strip()
+        blocks.append(f"{header.rstrip()}\n{text}" if header.strip() else text)
         previous = unit
     return "\n\n".join(blocks) + ("\n" if blocks else "")
