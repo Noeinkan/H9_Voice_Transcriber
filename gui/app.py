@@ -13,7 +13,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import paths, preflight, theme
+from . import meeting_review, paths, preflight, theme
+import meeting_split
 from .animated import PulseDot, SmoothBar
 from .filelist import FileList
 from .runner import Event, Options, Runner
@@ -75,6 +76,7 @@ class App(tk.Tk):
         self._segment = (0, 0)
         self._file_fraction = 0.0
         self._current_file = ""
+        self._finished_files: list[str] = []
         self._download_mode = False
         self._settle_job = None
         self._log_visible = tk.BooleanVar(value=False)
@@ -297,6 +299,7 @@ class App(tk.Tk):
                             activeforeground="#0f1117", borderwidth=0,
                             font=(theme.FONT, 9))
         self.menu.add_command(label="Open transcript", command=self._open_selected_transcript)
+        self.menu.add_command(label="Review meeting splits", command=self._review_selected_splits)
         self.menu.add_command(label="Edit glossary", command=self._edit_glossary)
         self.menu.add_command(label="Show audio in Explorer", command=self._reveal_selected)
         self.menu.add_separator()
@@ -407,6 +410,7 @@ class App(tk.Tk):
         self._segment = (0, 0)
         self._file_fraction = 0.0
         self._current_file = ""
+        self._finished_files = []
         self._download_mode = False
         self.progress.reset()
 
@@ -517,6 +521,8 @@ class App(tk.Tk):
                 self.visual.set_file(paths.INPUT_DIR / event.name)
                 self._set_stage(self._working_stage())
             elif event.status in ("done", "skipped", "error"):
+                if event.status == "done" and event.name not in self._finished_files:
+                    self._finished_files.append(event.name)
                 if event.name in self._uncounted:
                     self._uncounted.discard(event.name)
                     self._done_weight += self._weights[event.name]
@@ -584,11 +590,27 @@ class App(tk.Tk):
             self.progress.set_fraction(1.0)
             self._set_stage("Finished - transcripts are in the output folder")
             self._append_log("-- finished --", "ok")
+            pending = [paths.OUTPUT_DIR / (Path(name).stem + ".txt")
+                       for name in self._finished_files]
+            pending = [path for path in pending if meeting_split.proposal_path(path).is_file()]
+            if pending:
+                self.after(150, lambda: self._review_pending(pending))
         else:
             self._set_stage("Failed (exit code " + str(code) + ") - open the details below")
             self._append_log("-- failed with exit code " + str(code) + " --", "bad")
             if not self._log_visible.get():
                 self._toggle_log()
+
+    def _review_pending(self, pending: list[Path]) -> None:
+        if not pending:
+            return
+        dialog = meeting_review.show(self, pending[0])
+        if dialog is not None:
+            dialog.bind("<Destroy>", lambda event: self.after(
+                100, lambda: self._review_pending(pending[1:]))
+                if event.widget is dialog else None, add="+")
+        else:
+            self.after(100, lambda: self._review_pending(pending[1:]))
 
     def _update_progress(self) -> None:
         """Whole-run progress, in seconds of audio: finished files plus how far
@@ -692,6 +714,16 @@ class App(tk.Tk):
                 _open(transcript)
             else:
                 self._set_stage("No transcript yet for " + source.name)
+
+    def _review_selected_splits(self) -> None:
+        selected = self.files.selected_paths()
+        if len(selected) != 1:
+            return
+        transcript = paths.transcript_for(selected[0])
+        if not meeting_split.proposal_path(transcript).is_file():
+            messagebox.showinfo("Meeting splits", "No split suggestions for this recording yet. Transcribe it with the current version first.", parent=self)
+            return
+        meeting_review.show(self, transcript)
 
     def _edit_glossary(self) -> None:
         if self.runner.is_running():

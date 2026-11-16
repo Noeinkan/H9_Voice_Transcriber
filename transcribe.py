@@ -27,6 +27,7 @@ from buzz import cuda_setup  # noqa: F401
 
 
 from dataclasses import dataclass
+import meeting_split
 
 
 @dataclass
@@ -425,7 +426,7 @@ def should_skip(source: Path, output: Path) -> bool:
     return not DIARIZE or is_labelled(output)
 
 
-def label_speakers(source: Path, words: list[dict], output: Path) -> None:
+def label_speakers(source: Path, words: list[dict], output: Path) -> list[dict] | None:
     """Rewrite the transcript with every turn tagged Person 1, 2, ...
 
     Replaces the plain transcript `transcribe_one` has already written. That
@@ -478,9 +479,12 @@ def label_speakers(source: Path, words: list[dict], output: Path) -> None:
         log("  no enrolled voice yet; Person 1 is whoever speaks first")
 
     labels = diarization.person_labels(speaker_ts, me_cluster)
-    turns = diarization.build_turns(words, speaker_ts, labels, gap_ms=SILENCE_NOTE_MS)
+    turns = diarization.build_turns(
+        words, speaker_ts, labels, gap_ms=SILENCE_NOTE_MS,
+        break_gap_ms=meeting_split.MIN_GAP_MS)
     diarization.write_turns(output, turns, with_timestamps=TURN_TIMESTAMPS)
     log(f"  {len(labels)} voice(s) over {len(turns)} turns -> {output.name}")
+    return turns
 
 
 def transcribe_one(source: Path, model) -> None:
@@ -488,6 +492,8 @@ def transcribe_one(source: Path, model) -> None:
     if should_skip(source, output):
         log(f"SKIP {source.name} (output is up to date)")
         return
+
+    meeting_split.proposal_path(output).unlink(missing_ok=True)
 
     log(f"START {source.name}")
     glossary = source.with_name(source.name + ".terms.txt")
@@ -553,7 +559,18 @@ def transcribe_one(source: Path, model) -> None:
     log(f"DONE  {source.name} -> {output.name}")
 
     if DIARIZE:
-        label_speakers(source, all_words, output)
+        turns = label_speakers(source, all_words, output)
+        units = ([{"start_ms": turn["start_ms"], "end_ms": turn["end_ms"],
+                   "speaker": turn["speaker"], "text": turn["text"]}
+                  for turn in turns] if turns else [])
+    else:
+        units = [{"start_ms": segment.start, "end_ms": segment.end,
+                  "speaker": "", "text": segment.text.strip()}
+                 for segment in all_segments
+                 if segment.text.strip() and not _is_hallucination(segment.text.strip())]
+    count = meeting_split.save(output, units, TURN_TIMESTAMPS, SILENCE_NOTE_MS)
+    if count:
+        log(f"  {count} possible meeting break(s) -> review in the desktop window")
 
 
 def main() -> int:

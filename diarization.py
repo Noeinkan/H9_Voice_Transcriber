@@ -263,7 +263,7 @@ def person_labels(
 
 def build_turns(
     words: list[dict], speaker_ts: list[tuple[int, int, int]], labels: dict[int, str],
-    gap_ms: int = 0,
+    gap_ms: int = 0, break_gap_ms: int = 0,
 ) -> list[dict]:
     """Attach each transcribed word to a speaker, then merge into turns.
 
@@ -289,7 +289,8 @@ def build_turns(
             continue
         label = labels.get(item["speaker"], f"Person {item['speaker'] + 1}")
         silence = item["start_time"] - turns[-1]["end_ms"] if turns else 0
-        is_break = gap_ms > 0 and silence >= gap_ms
+        is_break = (gap_ms > 0 and silence >= gap_ms) or (
+            break_gap_ms > 0 and silence >= break_gap_ms)
         if turns and turns[-1]["speaker"] == label and not is_break:
             turns[-1]["text"] += " " + word
             turns[-1]["end_ms"] = item["end_time"]
@@ -300,7 +301,7 @@ def build_turns(
                     "start_ms": item["start_time"],
                     "end_ms": item["end_time"],
                     "text": word,
-                    "gap_ms": silence if is_break else 0,
+                    "gap_ms": silence if gap_ms > 0 and silence >= gap_ms else 0,
                 }
             )
     return turns

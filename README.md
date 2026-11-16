@@ -33,6 +33,12 @@ Nothing leaves your machine — the model runs locally.
 
 The three or four dots in the top right are readiness checks: **ffmpeg**, **Python env**, **large-v3 model**, and the **GPU name** once it has been queried (a few seconds after opening). Hover a red one to read what is wrong.
 
+### Recordings with several meetings
+
+For a long recording that contains several meetings, transcribe it normally with **Speakers: Auto**. The app compares pauses of at least five seconds with the voices heard shortly before and after each pause. It ranks the longest pauses and gives extra weight to a change in the nearby voices. Suggestions are spaced at least ten minutes apart, and the strongest two are initially selected. They are guesses, so review them against the transcript.
+
+After transcription, a review window shows the suggested times, pause lengths and text on either side. Tick the breaks you want, type a name for each meeting, then choose **Save meeting text files**. The original full transcript stays in `output/`; the named `.txt` files are created beside it. Choose **Later** to keep the suggestions without creating files. To reopen the review, right-click the recording in the queue and choose **Review meeting splits**. Recordings transcribed with an earlier version need to be transcribed again to obtain timing data for this review.
+
 ### Watching it work
 
 While a run is going, a waveform panel opens between the buttons and the progress bar. It is not decoration standing in for the real thing — it is the actual recording:

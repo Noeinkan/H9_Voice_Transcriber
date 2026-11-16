@@ -1,7 +1,7 @@
 # H9 Voice Transcriber
 
-Setup, controls, environment variables and troubleshooting: README. Here are
-only the invariants that break **silently** — no test defends them and none of
+Setup, controls, environment variables and troubleshooting: README. Which file
+does what: PROJECT_INDEX.md. Here are only the invariants that break **silently** — no test defends them and none of
 them fails at development time.
 
 **The window reads the transcriber's log lines.** `gui/runner.py` spawns
@@ -15,10 +15,12 @@ window has no way to set it. `runner.Options` always writes every field it
 owns, so a default changed only in `transcribe.py` is invisible to the window:
 change both, or the two entry points disagree.
 
-**`gui/` imports the standard library and nothing else.**
+**`gui/` imports the standard library and nothing else** — plus
+`meeting_split.py`, which is why that module must stay stdlib-only too.
 `tools/build_exe.py` freezes only the window and excludes torch, numpy,
-faster_whisper and the rest by name. An import added here resolves fine in
-`venv` and fails only inside the built `.exe`, in front of a user.
+faster_whisper and the rest by name. An import added here (or in
+`meeting_split.py`) resolves fine in `venv` and fails only inside the built
+`.exe`, in front of a user.
 
 **Nothing in `transcribe.py` may import from `buzz.transcriber.*` at module
 level**, and `from buzz import cuda_setup` stays ahead of every other non-stdlib
@@ -33,7 +35,7 @@ numbers only mean something inside one pass, so labelling per part gives
 shifted onto the full recording's clock first (`transcribe_one`).
 
 **The labelled transcript overwrites the plain one**, so `<name>.txt` is the
-only output. `should_skip` tells the two apart by matching `Person N: ` against
+only transcript (beside it sits at most the `<name>.meetings.json` sidecar). `should_skip` tells the two apart by matching `Person N: ` against
 the file's **first line** (`is_labelled`). Change how `write_turns` opens a
 turn and nothing raises: every recording just looks unlabelled forever and is
 re-transcribed on every run.
@@ -44,13 +46,30 @@ re-transcribed on every run.
 transcriber ignores, or promises to skip files it then redoes (and the Start
 button and progress bar size the run wrong).
 
+**Meeting-break suggestions can only fall between turns.** `transcribe_one`
+saves the turns (or Whisper segments, without speakers) plus the ranked pauses
+to `<name>.meetings.json`; `gui/meeting_review.py` reads that file after the
+run and writes the user-named split `.txt` files. That is why `label_speakers`
+passes `break_gap_ms=meeting_split.MIN_GAP_MS` to `build_turns`: it cuts a turn
+at every 5 s pause even when the speaker stays the same. Drop it and pauses
+inside one person's turn vanish from the suggestions — no error, just fewer
+breaks offered. The sidecar is deleted before every re-transcription, so a
+stale one never outlives its transcript.
+
+**The silence line and turn layout are written out three times**:
+`transcribe.py` (plain transcript), `diarization.silence_note` /
+`write_turns` (labelled), and `meeting_split.render` (split files). Change the
+`--- N min without speech ---` wording or the `[mm:ss] Person N: ` prefix in
+one and the others keep the old look; if the labelled-turn prefix changes,
+`_LABELLED_FIRST_LINE` above must follow.
+
 ## Verifying
 
 There is no test suite. Without a GPU:
 
 ```bat
-py -3.12 -c "import gui.app, gui.runner, gui.filelist, gui.preflight, gui.paths, gui.theme"
-venv\Scripts\python.exe -m compileall -q transcribe.py diarization.py voice_id.py enroll_voice.py gui tools
+py -3.12 -c "import gui.app, gui.runner, gui.filelist, gui.preflight, gui.paths, gui.theme, gui.meeting_review, meeting_split"
+venv\Scripts\python.exe -m compileall -q transcribe.py diarization.py meeting_split.py voice_id.py enroll_voice.py gui tools
 ```
 
 The first is the `gui/` rule above: a bare interpreter with none of the
