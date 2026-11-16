@@ -94,19 +94,17 @@ Pin the number whenever you know it — set **Speakers** to `2 people`, or pass 
 to guess, the clustering sometimes splits one voice into two when the line is noisy or someone
 changes tone.
 
-There is one file per recording, `output\<name>.txt`, and it comes out split into turns, laid out
-like a Microsoft Teams transcript:
+There is one file per recording, `output\<name>.txt`, and it comes out split into turns:
 
 ```text
-[00:04] Person 1
-So, tell me how the handover went.
+[00:04] Person 1: So, tell me how the handover went.
 
-[00:09] Person 2
-We closed it two weeks late, but the model was clean by then.
+[00:09] Person 2: We closed it two weeks late, but the model was clean by then.
 ```
 
-When one person talks for a long time, their speech is still cut into entries of roughly 30–60
-seconds, at the end of a sentence or a short pause, so no paragraph runs for pages.
+On recordings longer than about an hour, the voice grouping sometimes hears everyone as one
+person. When that happens it is re-done once over the whole recording with a stricter setting
+(`transcripts.log` says `regrouped it in a single pass`); it adds a few minutes, only in that case.
 
 With `--no-speakers` that same file is one unbroken block of text instead.
 

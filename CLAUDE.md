@@ -35,9 +35,9 @@ numbers only mean something inside one pass, so labelling per part gives
 shifted onto the full recording's clock first (`transcribe_one`).
 
 **The labelled transcript overwrites the plain one**, so `<name>.txt` is the
-only transcript (beside it sits at most the `<name>.meetings.json` sidecar). `should_skip` tells the two apart by matching `[mm:ss] Person N` (alone on
-the line; the older inline `Person N: text` still matches) against the file's
-**first line** (`is_labelled`). Change how `write_turns` opens a
+only transcript (beside it sits at most the `<name>.meetings.json` sidecar). `should_skip` tells the two apart by matching `[mm:ss] Person N: ` (a bare
+`Person N` header line matches too) against the file's **first line**
+(`is_labelled`). Change how `write_turns` opens a
 turn and nothing raises: every recording just looks unlabelled forever and is
 re-transcribed on every run.
 
@@ -54,13 +54,15 @@ run and writes the user-named split `.txt` files. That is why `label_speakers`
 passes `break_gap_ms=meeting_split.MIN_GAP_MS` to `build_turns`: it cuts a turn
 at every 5 s pause even when the speaker stays the same. Drop it and pauses
 inside one person's turn vanish from the suggestions — no error, just fewer
-breaks offered. The sidecar is deleted before every re-transcription, so a
-stale one never outlives its transcript.
+breaks offered. Those cuts are for the sidecar only: `write_turns` and
+`meeting_split.render` join same-speaker pieces back into one paragraph.
+The sidecar is deleted before every re-transcription, so a stale one never
+outlives its transcript.
 
 **The silence line and turn layout are written out three times**:
 `transcribe.py` (plain transcript), `diarization.silence_note` /
 `write_turns` (labelled), and `meeting_split.render` (split files). Change the
-`--- N min without speech ---` wording or the `[mm:ss] Person N` header line in
+`--- N min without speech ---` wording or the `[mm:ss] Person N: ` prefix in
 one and the others keep the old look; if the labelled-turn prefix changes,
 `_LABELLED_FIRST_LINE` above must follow.
 

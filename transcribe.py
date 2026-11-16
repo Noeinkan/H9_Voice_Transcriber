@@ -137,8 +137,7 @@ def _write_txt(path: Path, segments: list) -> None:
         if previous_end is not None and SILENCE_NOTE_MS and gap >= SILENCE_NOTE_MS:
             parts.append(_silence_line(previous_end, gap) + "\n\n")
         if new_paragraph and TURN_TIMESTAMPS:
-            # Time on its own line, like the labelled transcript's header.
-            parts.append(f"[{_clock(segment.start)}]\n")
+            parts.append(f"[{_clock(segment.start)}] ")
         parts.append(text + " ")
         previous_end = segment.end
     path.write_text("".join(parts), encoding="utf-8")
@@ -470,6 +469,8 @@ def label_speakers(source: Path, words: list[dict], output: Path) -> list[dict] 
     if not speaker_ts:
         log("  the diarizer found no speech; skipping speaker labels")
         return
+    if diarization.regrouped:
+        log("  long recording first heard as one voice; regrouped it in a single pass")
 
     me_cluster, scores = voice_id.identify_me(waveform, speaker_ts, device=device)
     if scores:

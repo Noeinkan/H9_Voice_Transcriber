@@ -83,6 +83,51 @@ def _patch_nemo_scale_mapping() -> None:
         module.get_argmin_mat = _nearest_anchor_mapping
 
 
+# Past ~45 min of speech NeMo groups voices "long-form": ~40-minute chunks
+# grouped roughly, then merged. On a 2-hour, 6-person recording the merge saw
+# no boundary between voices and returned one speaker for everyone, while a
+# single pass over the whole recording with a narrower threshold search told
+# them apart. So when the long-form path says "one voice", retry once that
+# way. Recordings it already splits are left exactly as they were.
+RETRY_MAX_RP_THRESHOLD = 0.15
+
+# True when the last diarize_waveform call needed that retry (for the log).
+regrouped = False
+
+
+def _patch_single_voice_retry() -> None:
+    import torch
+    from nemo.collections.asr.parts.utils.longform_clustering import (
+        LongFormSpeakerClustering,
+    )
+
+    original = LongFormSpeakerClustering.forward_infer
+    if getattr(original, "_h9_retry", False):
+        return
+
+    def forward_infer(self, *args, **kwargs):
+        global regrouped
+        labels = original(self, *args, **kwargs)
+        counts = kwargs.get("multiscale_segment_counts")
+        per_chunk = kwargs.get("embeddings_per_chunk")
+        long_form = (per_chunk is not None and counts is not None
+                     and int(torch.max(counts)) > per_chunk)
+        if (args or not long_form or kwargs.get("oracle_num_speakers", -1) > 0
+                or torch.unique(labels).numel() > 1):
+            return labels
+        try:
+            retry = original(self, **dict(kwargs, embeddings_per_chunk=None,
+                                          max_rp_threshold=RETRY_MAX_RP_THRESHOLD))
+        except RuntimeError:  # out of memory on a very long recording
+            torch.cuda.empty_cache()
+            return labels
+        regrouped = True
+        return retry
+
+    forward_infer._h9_retry = True
+    LongFormSpeakerClustering.forward_infer = forward_infer
+
+
 MSDD_WINDOWS_PER_PASS = int(os.getenv("H9_DIAR_WINDOWS", "64"))
 
 
@@ -131,6 +176,7 @@ def _load_diarizer(device: str):
 
         _silence_nemo()
         _patch_nemo_scale_mapping()
+        _patch_single_voice_retry()
         config = create_config()
         # NeMo also loads its VAD and speaker models through cfg.device.
         # Moving only the outer module leaves those models on CUDA.
@@ -167,6 +213,8 @@ def diarize_waveform(
     """
     from nemo.collections.asr.parts.utils.speaker_utils import rttm_to_labels
 
+    global regrouped
+    regrouped = False
     device = device or default_device()
     model = _load_diarizer(device)
 
@@ -261,19 +309,6 @@ def person_labels(
     return {speaker: f"Person {i}" for i, speaker in enumerate(order, start=1)}
 
 
-# A turn longer than this starts over at the next sentence end or short
-# pause, the way Teams cuts one person's monologue into separate entries.
-# Past the hard limit it starts over at the next word, punctuation or not:
-# Whisper sometimes drops punctuation for minutes at a time.
-TURN_SOFT_MAX_MS = 30_000
-TURN_HARD_MAX_MS = 60_000
-_PAUSE_MS = 700
-
-
-def _ends_sentence(text: str) -> bool:
-    return text.rstrip('"\')').endswith((".", "?", "!"))
-
-
 def build_turns(
     words: list[dict], speaker_ts: list[tuple[int, int, int]], labels: dict[int, str],
     gap_ms: int = 0, break_gap_ms: int = 0,
@@ -304,10 +339,6 @@ def build_turns(
         silence = item["start_time"] - turns[-1]["end_ms"] if turns else 0
         is_break = (gap_ms > 0 and silence >= gap_ms) or (
             break_gap_ms > 0 and silence >= break_gap_ms)
-        if turns and not is_break:
-            length = turns[-1]["end_ms"] - turns[-1]["start_ms"]
-            is_break = length >= TURN_HARD_MAX_MS or (length >= TURN_SOFT_MAX_MS and (
-                _ends_sentence(turns[-1]["text"]) or silence >= _PAUSE_MS))
         if turns and turns[-1]["speaker"] == label and not is_break:
             turns[-1]["text"] += " " + word
             turns[-1]["end_ms"] = item["end_time"]
@@ -342,12 +373,23 @@ def format_time(milliseconds: int) -> str:
 
 
 def write_turns(path: Path, turns: list[dict], with_timestamps: bool = False) -> None:
+    """One paragraph per change of speaker, `[mm:ss] Person N: text`.
+
+    `turns` is also cut at every 5 s pause for the meeting-break suggestions;
+    those cuts are joined back here, so a paragraph only ends when someone
+    else speaks or a silence line sits between the two.
+    """
     blocks = []
+    previous = None
     for turn in turns:
         if turn.get("gap_ms"):
             blocks.append(silence_note(turn["start_ms"] - turn["gap_ms"],
                                        turn["gap_ms"], with_timestamps))
-        # Teams layout: time and speaker on one line, what they said below.
+        elif previous is not None and previous["speaker"] == turn["speaker"]:
+            blocks[-1] += " " + turn["text"]
+            previous = turn
+            continue
         prefix = f"[{format_time(turn['start_ms'])}] " if with_timestamps else ""
-        blocks.append(f"{prefix}{turn['speaker']}\n{turn['text']}")
+        blocks.append(f"{prefix}{turn['speaker']}: {turn['text']}")
+        previous = turn
     path.write_text("\n\n".join(blocks) + ("\n" if blocks else ""), encoding="utf-8")
