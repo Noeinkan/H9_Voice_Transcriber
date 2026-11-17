@@ -44,6 +44,7 @@ class Options:
     speakers: int = 0              # 0 = let the clustering decide
     timestamps: bool = True        # [mm:ss] at the start of every turn
     silence_seconds: int = 60      # mark silences this long; 0 = never
+    redo: tuple[str, ...] = ()     # input/ names to redo though up to date
 
     def env(self) -> dict[str, str]:
         environment = dict(os.environ)
@@ -59,6 +60,7 @@ class Options:
             H9_SPEAKERS=str(self.speakers if self.diarize else 0),
             H9_TIMESTAMPS="1" if self.timestamps else "0",
             H9_SILENCE_SECONDS=str(self.silence_seconds),
+            H9_REDO="|".join(self.redo),
             H9_PROGRESS="1",
             PYTHONUNBUFFERED="1",
             PYTHONIOENCODING="utf-8",

@@ -33,6 +33,9 @@ LOG_LINE_CAP = 1500
 ETA_WARMUP_SECONDS = 20
 # Stand-in length for a file ffprobe could not measure.
 UNKNOWN_FILE_SECONDS = 600.0
+# Context-menu entry 1 (right after "Open transcript") flips between these.
+_REDO_LABEL = "Transcribe again"
+_UNDO_REDO_LABEL = "Don't transcribe again"
 
 
 def enable_dpi_awareness() -> None:
@@ -118,6 +121,7 @@ class App(tk.Tk):
         self.files.grid(row=3, column=0, sticky="nsew")
         self.files.tree.bind("<Double-1>", self._open_selected_transcript, add="+")
         self.files.tree.bind("<Button-3>", self._show_context_menu)
+        self.files.tree.bind("<Delete>", lambda _event: self._remove_selected())
         self._build_context_menu()
 
         self._build_controls(root, row=4)
@@ -299,11 +303,13 @@ class App(tk.Tk):
                             activeforeground="#0f1117", borderwidth=0,
                             font=(theme.FONT, 9))
         self.menu.add_command(label="Open transcript", command=self._open_selected_transcript)
+        self.menu.add_command(label=_REDO_LABEL, command=self._redo_selected)
         self.menu.add_command(label="Review meeting splits", command=self._review_selected_splits)
         self.menu.add_command(label="Edit glossary", command=self._edit_glossary)
         self.menu.add_command(label="Show audio in Explorer", command=self._reveal_selected)
         self.menu.add_separator()
-        self.menu.add_command(label="Remove from input folder", command=self._remove_selected)
+        self.menu.add_command(label="Remove from input folder", accelerator="Del",
+                              command=self._remove_selected)
 
     # -- small widget helpers ---------------------------------------------
     def _small_button(self, master, text: str, command) -> ttk.Button:
@@ -424,6 +430,7 @@ class App(tk.Tk):
             diarize=speakers is not None,
             speakers=speakers or 0,
             timestamps=self._timestamps.get(),
+            redo=self.files.redo_names(),
         )
         try:
             self.runner.start(options)
@@ -702,6 +709,10 @@ class App(tk.Tk):
             return
         if row not in self.files.tree.selection():
             self.files.tree.selection_set(row)
+        names = [path.name for path in self.files.selected_paths()]
+        self.menu.entryconfigure(
+            1, label=_UNDO_REDO_LABEL if self.files.all_marked_redo(names) else _REDO_LABEL,
+            state="disabled" if self.runner.is_running() else "normal")
         try:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -714,6 +725,12 @@ class App(tk.Tk):
                 _open(transcript)
             else:
                 self._set_stage("No transcript yet for " + source.name)
+
+    def _redo_selected(self) -> None:
+        """Queue up-to-date files for the next run without redoing all of them."""
+        if self.runner.is_running():
+            return
+        self.files.toggle_redo([path.name for path in self.files.selected_paths()])
 
     def _review_selected_splits(self) -> None:
         selected = self.files.selected_paths()

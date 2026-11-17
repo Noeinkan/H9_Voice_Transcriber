@@ -25,11 +25,11 @@ Nothing leaves your machine — the model runs locally.
 | **Precision** | `Low VRAM (int8)` is the safe default on a 4 GB card. `Sharper (float16)` is better when you have VRAM to spare. |
 | **Speakers** | `Auto` by default: the transcript comes out split into turns tagged `Person 1` / `Person 2`, and the clustering counts the voices itself. Pick `2 people` for an interview when you already know the count — it is more reliable than guessing. `Off` gives one unbroken block of text and skips the extra pass over the audio. See [Telling the voices apart](#telling-the-voices-apart) — including how to make yourself Person 1. |
 | **Glossary...** | Select one audio file and enter uncommon names or technical terms, one per line or comma-separated. Avoid everyday words and repeated terms such as `Lot 1` and `Lot 2`: too many hints can make Whisper repeat or invent words. Saving a glossary marks that recording for transcription again. |
-| **Redo files already transcribed** | Off by default: files whose `.txt` is newer than the audio are skipped. Tick it to transcribe them again. |
+| **Redo files already transcribed** | Off by default: files whose `.txt` is newer than the audio are skipped. Tick it to transcribe **all** of them again; for just one or two, use right-click → **Transcribe again** instead. |
 | **Start** | Names the work before you press it — `Transcribe 3 files (1 h 46 min)` — and reads `Nothing new to transcribe` when every file is up to date. During a run the status line adds an estimate (`about 12 min left`) once the pace is known. |
 | **Stop** | Kills the transcription and the ffmpeg processes under it. Files already finished keep their transcripts. |
 | **Show details** | Opens the live log — the same lines that go into `transcripts.log`. It opens by itself if a run fails. |
-| Right-click a row | Open transcript · Show audio in Explorer · Remove from input folder. |
+| Right-click a row | Open transcript · Transcribe again (only the selected files, on the next Start; click again to undo) · Review meeting splits · Edit glossary · Show audio in Explorer · Remove from input folder (also the **Del** key; the transcript in `output` is kept). |
 
 The three or four dots in the top right are readiness checks: **ffmpeg**, **Python env**, **large-v3 model**, and the **GPU name** once it has been queried (a few seconds after opening). Hover a red one to read what is wrong.
 
@@ -179,6 +179,7 @@ Environment variables read by `transcribe.py`, all set for you by the window:
 | `H9_COMPUTE_TYPE` | `int8` | `int8` or `float16` |
 | `H9_VAD` | on | Voice-activity filtering |
 | `H9_FORCE` | off | Re-transcribe files that already have an up-to-date `.txt` |
+| `H9_REDO` | empty | Re-transcribe only these files from `input/`, names separated by `\|` (what **Transcribe again** sets) |
 | `H9_DIARIZE` | **on** | Split `<name>.txt` into Person 1 / Person 2 turns. Set to `0` (`run.bat --no-speakers`) for one unbroken block of text |
 | `H9_SPEAKERS` | auto | How many people are in the recording, when you know it |
 | `<audio name>.terms.txt` | absent | Optional per-recording glossary beside the audio in `input/`; the window's **Glossary...** button edits it |

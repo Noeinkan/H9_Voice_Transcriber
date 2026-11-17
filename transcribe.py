@@ -414,8 +414,14 @@ def is_labelled(output: Path) -> bool:
         return False
 
 
+# File names (in input/) to transcribe again even when their transcript is up
+# to date, separated by "|", which Windows never allows in a file name. The
+# window's "Transcribe again" sets it; H9_FORCE does the same for every file.
+REDO = {name for name in os.getenv("H9_REDO", "").split("|") if name}
+
+
 def should_skip(source: Path, output: Path) -> bool:
-    if _env_flag("H9_FORCE", default=False):
+    if _env_flag("H9_FORCE", default=False) or source.name in REDO:
         return False
     if not (output.exists() and output.stat().st_mtime >= source.stat().st_mtime):
         return False

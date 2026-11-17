@@ -47,6 +47,9 @@ class FileList(ttk.Frame):
         # The names transcribe.py listed when the run began. It reads input/
         # once, so anything added after that waits for the next run.
         self._run_names: set[str] | None = None
+        # Picked with "Transcribe again": redone on the next run even though
+        # up to date. A name leaves the set once its run reports it Done.
+        self._redo: set[str] = set()
         self._sort_column = "date"
         self._sort_reverse = True
 
@@ -90,13 +93,14 @@ class FileList(ttk.Frame):
             if name not in self._paths:
                 self._status.pop(name, None)
                 self._detail.pop(name, None)
+        self._redo &= set(self._paths)
         for name, path in self._paths.items():
             if name in self._status:
                 continue
             if self._run_names is not None and name not in self._run_names:
                 self._status[name] = "later"
                 self._detail[name] = ""
-            elif paths.is_up_to_date(path, self._diarize):
+            elif name not in self._redo and paths.is_up_to_date(path, self._diarize):
                 self._status[name] = "skipped"
                 self._detail[name] = "already up to date"
             else:
@@ -158,6 +162,8 @@ class FileList(ttk.Frame):
     def _insert(self, name: str, metadata: tuple[int | None, float | None]) -> None:
         status = self._status.get(name, "queued")
         label = STATUS_LABEL.get(status, status)
+        if status == "queued" and name in self._redo:
+            label = "Queued (again)"
         detail = self._detail.get(name, "")
         if status in ("working", "error") and detail:
             label = f"{label} — {detail}" if status == "error" else detail.capitalize()
@@ -174,6 +180,8 @@ class FileList(ttk.Frame):
             return
         self._status[name] = status
         self._detail[name] = detail
+        if status == "done":
+            self._redo.discard(name)
         self._redraw()
         if status == "working" and self.tree.exists(name):
             self.tree.see(name)
@@ -184,7 +192,7 @@ class FileList(ttk.Frame):
         self._run_names = set(self._paths)
         work: list[str] = []
         for name, path in self._paths.items():
-            if force or not paths.is_up_to_date(path, self._diarize):
+            if force or name in self._redo or not paths.is_up_to_date(path, self._diarize):
                 self._status[name] = "queued"
                 self._detail[name] = ""
                 work.append(name)
@@ -223,7 +231,28 @@ class FileList(ttk.Frame):
     def to_do(self, force: bool) -> list[str]:
         """Names the next run would transcribe, in the order it takes them."""
         return [name for name, path in self._paths.items()
-                if force or not paths.is_up_to_date(path, self._diarize)]
+                if force or name in self._redo
+                or not paths.is_up_to_date(path, self._diarize)]
+
+    def toggle_redo(self, names: list[str]) -> None:
+        """Mark files to transcribe again; if all are marked already, unmark."""
+        names = [name for name in names if name in self._paths]
+        if not names:
+            return
+        if all(name in self._redo for name in names):
+            self._redo.difference_update(names)
+        else:
+            self._redo.update(names)
+        for name in names:  # re-judged by refresh()
+            self._status.pop(name, None)
+            self._detail.pop(name, None)
+        self.refresh()
+
+    def redo_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._redo))
+
+    def all_marked_redo(self, names: list[str]) -> bool:
+        return bool(names) and all(name in self._redo for name in names)
 
     def seconds(self, name: str) -> float | None:
         """Audio length in seconds, or None until ffprobe has answered."""
