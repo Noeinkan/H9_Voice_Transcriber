@@ -29,6 +29,7 @@ Nothing leaves your machine — the model runs locally.
 | **Start** | Names the work before you press it — `Transcribe 3 files (1 h 46 min)` — and reads `Nothing new to transcribe` when every file is up to date. During a run the status line adds an estimate (`about 12 min left`) once the pace is known. |
 | **Stop** | Kills the transcription and the ffmpeg processes under it. Files already finished keep their transcripts. |
 | **Show details** | Opens the live log — the same lines that go into `transcripts.log`. It opens by itself if a run fails. |
+| **Transcribe again** / **Remove** | Next to *AUDIO QUEUE*; select one or more rows first. *Transcribe again* redoes only those files on the next Start (click again to undo); *Remove* deletes the audio from `input` and keeps the transcript. Both are off while a run is going. |
 | Right-click a row | Open transcript · Transcribe again (only the selected files, on the next Start; click again to undo) · Review meeting splits · Edit glossary · Show audio in Explorer · Remove from input folder (also the **Del** key; the transcript in `output` is kept). |
 
 The three or four dots in the top right are readiness checks: **ffmpeg**, **Python env**, **large-v3 model**, and the **GPU name** once it has been queried (a few seconds after opening). Hover a red one to read what is wrong.

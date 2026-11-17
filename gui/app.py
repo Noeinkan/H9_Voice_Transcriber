@@ -122,6 +122,8 @@ class App(tk.Tk):
         self.files.tree.bind("<Double-1>", self._open_selected_transcript, add="+")
         self.files.tree.bind("<Button-3>", self._show_context_menu)
         self.files.tree.bind("<Delete>", lambda _event: self._remove_selected())
+        self.files.tree.bind("<<TreeviewSelect>>",
+                             lambda _event: self._update_selection_buttons(), add="+")
         self._build_context_menu()
 
         self._build_controls(root, row=4)
@@ -159,8 +161,21 @@ class App(tk.Tk):
         bar.grid(row=row, column=0, sticky="ew", pady=(0, 6))
         bar.columnconfigure(0, weight=1)
 
-        ttk.Label(bar, text="AUDIO QUEUE", style="Section.TLabel") \
-            .grid(row=0, column=0, sticky="w")
+        left = ttk.Frame(bar, style="App.TFrame")
+        left.grid(row=0, column=0, sticky="w")
+        ttk.Label(left, text="AUDIO QUEUE", style="Section.TLabel").pack(side="left",
+                                                                     padx=(0, 14))
+        # Act on the selected rows; greyed out until a row is selected.
+        self.redo_button = self._small_button(left, _REDO_LABEL, self._redo_selected)
+        self.redo_button.pack(side="left", padx=(0, 6))
+        self.remove_button = self._small_button(left, "Remove", self._remove_selected)
+        self.remove_button.pack(side="left")
+        self.redo_button.configure(state="disabled")
+        self.remove_button.configure(state="disabled")
+        _tooltip(self.redo_button, "Transcribe the selected file(s) again on the next "
+                                   "Start, without redoing everything else.")
+        _tooltip(self.remove_button, "Delete the selected audio from the input folder. "
+                                     "Transcripts in output are kept.")
 
         buttons = ttk.Frame(bar, style="App.TFrame")
         buttons.grid(row=0, column=1, sticky="e")
@@ -460,6 +475,7 @@ class App(tk.Tk):
     def _set_running(self, running: bool) -> None:
         self.stop_button.configure(state="normal" if running else "disabled")
         self.glossary_button.configure(state="disabled" if running else "normal")
+        self._update_selection_buttons()
         for widget in self._option_widgets:
             widget.configure(state="disabled" if running else "readonly")
         if running:
@@ -654,9 +670,19 @@ class App(tk.Tk):
             text += f"  -  part {index} of {parts}"
         return text
 
+    def _update_selection_buttons(self) -> None:
+        """Transcribe again / Remove: only with a selection, never mid-run."""
+        names = [path.name for path in self.files.selected_paths()]
+        state = "normal" if names and not self.runner.is_running() else "disabled"
+        self.redo_button.configure(
+            state=state,
+            text=_UNDO_REDO_LABEL if self.files.all_marked_redo(names) else _REDO_LABEL)
+        self.remove_button.configure(state=state)
+
     def _on_files_changed(self) -> None:
         counts = self.files.counts()
         self._update_start_button()
+        self._update_selection_buttons()
 
         if counts["total"] == 0:
             self.count_label.configure(text="")
@@ -713,6 +739,8 @@ class App(tk.Tk):
         self.menu.entryconfigure(
             1, label=_UNDO_REDO_LABEL if self.files.all_marked_redo(names) else _REDO_LABEL,
             state="disabled" if self.runner.is_running() else "normal")
+        self.menu.entryconfigure(
+            "end", state="disabled" if self.runner.is_running() else "normal")
         try:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -787,7 +815,8 @@ class App(tk.Tk):
 
     def _remove_selected(self) -> None:
         selected = self.files.selected_paths()
-        if not selected:
+        # Mid-run the transcriber may be reading the file, or about to.
+        if not selected or self.runner.is_running():
             return
         names = "\n".join(path.name for path in selected)
         question = ("Delete these file(s) from the input folder?\n\n" + names +
